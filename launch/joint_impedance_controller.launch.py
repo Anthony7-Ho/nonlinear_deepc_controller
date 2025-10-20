@@ -1,0 +1,96 @@
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+
+
+def generate_launch_description():
+    # Reuse the same arguments
+    robot_ip_arg = DeclareLaunchArgument(
+        'robot_ip', default_value='192.168.1.200', description='Hostname or IP address of the robot.'
+    )
+    arm_id_arg = DeclareLaunchArgument(
+        'arm_id', default_value='fr3',
+        description='Arm id (fer, fr3, fp3). Must match your URDF/ros2_control names.'
+    )
+    use_rviz_arg = DeclareLaunchArgument(
+        'use_rviz', default_value='false', description='Start RViz.'
+    )
+    use_fake_hw_arg = DeclareLaunchArgument(
+        'use_fake_hardware', default_value='false', description='Use fake ros2_control hardware.'
+    )
+    fake_sensor_cmds_arg = DeclareLaunchArgument(
+        'fake_sensor_commands', default_value='false',
+        description="Only valid when 'use_fake_hardware' is true."
+    )
+    load_gripper_arg = DeclareLaunchArgument(
+        'load_gripper', default_value='true',
+        description='Load Franka gripper.'
+    )
+
+    # Optional: pass a param file to your controller
+    # controller_param_file_arg = DeclareLaunchArgument(
+    #     'controller_param_file', default_value='',
+    #     description='Optional YAML with parameters for joint_impedance_controller.'
+    # )
+
+    robot_ip = LaunchConfiguration('robot_ip')
+    arm_id = LaunchConfiguration('arm_id')
+    load_gripper = LaunchConfiguration('load_gripper')
+    use_fake_hardware = LaunchConfiguration('use_fake_hardware')
+    fake_sensor_commands = LaunchConfiguration('fake_sensor_commands')
+    use_rviz = LaunchConfiguration('use_rviz')
+    # controller_param_file = LaunchConfiguration('controller_param_file')
+
+    # Include Franka bringup launch file
+    franka_bringup_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([FindPackageShare('franka_bringup'), 'launch', 'franka.launch.py'])
+        ]),
+        launch_arguments={
+            'robot_ip': robot_ip,
+            'arm_id': arm_id,
+            'load_gripper': load_gripper,
+            'use_fake_hardware': use_fake_hardware,
+            'fake_sensor_commands': fake_sensor_commands,
+            'use_rviz': use_rviz
+        }.items()
+    )
+
+    # Spawn controller
+    # Instance name: joint_impedance_controller
+    # Type: must match plugin class name in the XML:
+    spawner_args = [
+        'joint_impedance_controller',
+        '--controller-type', 'nonlinear_deepc_controller/JointImpedanceController',
+    ]
+    # If a param file was provided, pass it to spawner
+    # (Leave empty to use built-in defaults: ~/trajectory_export.csv and ~/tau_log.csv)
+    # from launch.conditions import IfCondition
+    # from launch.substitutions import NotEqualsSubstitution, TextSubstitution
+    # spawner_with_params = Node(
+    #     package='controller_manager',
+    #     executable='spawner',
+    #     arguments=spawner_args + ['--param-file', controller_param_file],
+    #     condition=IfCondition(NotEqualsSubstitution(left=controller_param_file, right=TextSubstitution(text=""))),
+    #     output='screen',
+    # )
+
+    spawner_no_params = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=spawner_args,
+        # condition=IfCondition(NotEqualsSubstitution(left=controller_param_file, right=TextSubstitution(text="FOOBAR"))),
+        # the above odd condition creates a mutually exclusive pair with the first node
+        output='screen',
+    )
+
+    return LaunchDescription([
+        robot_ip_arg, arm_id_arg, use_rviz_arg, use_fake_hw_arg, fake_sensor_cmds_arg, load_gripper_arg,
+        #controller_param_file_arg,
+        franka_bringup_launch,
+        #spawner_with_params,
+        spawner_no_params,
+    ])

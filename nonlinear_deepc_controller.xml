@@ -1,0 +1,8 @@
+<library path="nonlinear_deepc_controller">
+  <class
+    name="nonlinear_deepc_controller/JointImpedanceController"
+    type="nonlinear_deepc_controller::JointImpedanceController"
+    base_class_type="controller_interface::ControllerInterface">
+    <description>Joint-impedance trajectory follower with torque logging (rows=taus, columns=timesteps).</description>
+  </class>
+</library>
