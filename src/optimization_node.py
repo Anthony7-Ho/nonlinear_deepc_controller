@@ -7,6 +7,7 @@ import numpy as np
 import cvxpy as cp
 from typing import Optional, Dict, Any
 import os
+import time
 
 # DeePC Optimization class
 class KernelDeePCOptimization:
@@ -14,7 +15,7 @@ class KernelDeePCOptimization:
     Class for your kernel DeePC optimization.
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], logger = None):
         """
         Args:
             config: dictionary with user-defined configuration, e.g.:
@@ -34,6 +35,7 @@ class KernelDeePCOptimization:
                   "lambda_k": float, # regularization weight for kernel matrix
         """
         self.cfg = config
+        self.logger = logger
 
         # Extract dimensions
         self.m, self.p = self.cfg["m"], self.cfg["p"]
@@ -86,7 +88,7 @@ class KernelDeePCOptimization:
         Kernel_cost = (self.K + self.gamma*np.eye(self.Hc)) @ self.g - self.k_vec
 
         cost = (
-            cp.quad_form(self.Hy_future * self.g, self.Q) +
+            cp.quad_form(self.Hy_future @ self.g, self.Q) +
             cp.quad_form(self.u, self.R) +
             self.lambda_g * cp.sum_squares(self.g) +
             self.lambda_k * cp.sum_squares(Kernel_cost)
@@ -112,16 +114,21 @@ class KernelDeePCOptimization:
         self.u_ini.value = u_ini
         self.y_ini.value = y_ini
 
+        start_time = time.perf_counter()
+
         # Solve
         try:
             self.problem.solve(solver=cp.MOSEK, warm_start=True, verbose=False)
         except Exception as e:
-            print(f"[DeePCOptimization] Solve error: {e}")
+            self.logger.error(f"[DeePCOptimization] Solve error: {e}")
             return None
+        
+        solve_time = (time.perf_counter() - start_time) * 1000  # ms
+        self.logger.info(f"[DeePCOptimization] Solve time: {solve_time:.2f} ms")
 
         status = self.problem.status
         if status not in ("optimal", "optimal_inaccurate"):
-            print(f"[DeePCOptimization] Problem status: {status}")
+            self.logger.warning(f"[DeePCOptimization] Problem status: {status}")
             return None
 
         out = {
@@ -149,7 +156,7 @@ class KernelDeePCOptimization:
         d2 = self.X1_row_norm2 + term_xy - 2.0*term_ax     # elementwise
 
         # RBF part
-        rbf = cp.exp(-d2 / (2.0 * (self.rbf_scale**2))) # shape (Hc,)
+        rbf = cp.exp(-self.rbf_scale * d2) # shape (Hc,)
 
         # linear part
         lin_u = self.X2 @ self.u # shape (Hc,)
@@ -209,7 +216,7 @@ class OptimizationNode(Node):
             lambda_g = lambda_g,
             lambda_k = lambda_k,
         )
-        self.optimizer = KernelDeePCOptimization(cfg)
+        self.optimizer = KernelDeePCOptimization(cfg, logger=self.get_logger())
 
         # Subscriber for combined init vector [u_ini ; y_ini]
         topic_init = self.get_parameter("topic_init").value
