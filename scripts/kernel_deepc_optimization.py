@@ -8,6 +8,7 @@ import cvxpy as cp
 from typing import Optional, Dict, Any
 import os
 import time
+from ament_index_python.packages import get_package_share_directory
 
 # DeePC Optimization class
 class KernelDeePCOptimization:
@@ -79,9 +80,10 @@ class KernelDeePCOptimization:
         # split X into the two parts used by eq. (36)
         d_ini = self.m*self.T_ini + self.p*self.T_ini
         d_u = self.m*self.N
-        self.X1 = self.X[:, :d_ini] # rows x1_i
-        self.X2 = self.X[:, d_ini:] # rows x2_i
-        self.X1_row_norm2 = np.sum(self.X1**2, axis=1) # precompute squared norms of rows of X1
+        # TODO: verify dimensions (Probably have to pick the columns)
+        self.X1 = self.X[:d_ini, :] # columns x1_i
+        self.X2 = self.X[d_ini:, :] # columns x2_i
+        self.X1_col_norm2 = np.sum(self.X1**2, axis=0) # precompute squared norms of columns of X1
 
         # build k(u_ini, y_ini, u) for the mixed kernel
         self.k_vec = self.build_k_vector()
@@ -118,7 +120,7 @@ class KernelDeePCOptimization:
 
         # Solve
         try:
-            self.problem.solve(solver=cp.MOSEK, warm_start=True, verbose=False)
+            self.problem.solve(solver=cp.CLARABEL, warm_start=True, verbose=False)
         except Exception as e:
             self.logger.error(f"[DeePCOptimization] Solve error: {e}")
             return None
@@ -139,7 +141,7 @@ class KernelDeePCOptimization:
             out["g_opt"] = np.array(self.g.value).reshape(-1)
         return out
     
-    def build_k_vector(self):
+    def build_k_vector(self): # TODO: verify
         """
         Returns a CVXPY expression of shape (Hc,) implementing
         k(u_ini, y_ini, u) from eq. (36):
@@ -150,16 +152,16 @@ class KernelDeePCOptimization:
         # concatenate parameters col(u_ini; y_ini)
         xy_ini = cp.hstack([self.u_ini, self.y_ini]) # shape (d_ini,)
 
-        # compute squared distances 
-        term_xy = cp.sum_squares(xy_ini) * np.ones(self.Hc)    # broadcast scalar
-        term_ax = self.X1 @ xy_ini                         # shape (Hc,)
-        d2 = self.X1_row_norm2 + term_xy - 2.0*term_ax     # elementwise
+        # compute squared distances ||x - y||^2 = ||x||^2 + ||y||^2 - 2 x^T y
+        term_xy = cp.sum_squares(xy_ini) * np.ones(self.Hc) # broadcast to shape (Hc,)
+        term_ax = self.X1.T @ xy_ini # shape (Hc,)
+        d2 = self.X1_col_norm2 + term_xy - 2.0*term_ax # elementwise
 
         # RBF part
         rbf = cp.exp(-self.rbf_scale * d2) # shape (Hc,)
 
         # linear part
-        lin_u = self.X2 @ self.u # shape (Hc,)
+        lin_u = self.X2.T @ self.u # shape (Hc,)
 
         # mixed kernel vector
         return rbf + lin_u
@@ -193,14 +195,14 @@ class OptimizationNode(Node):
         Q = np.eye(p * N) * 1.0
 
         # Load Kernel gram matrix and Hankel matrices
-        base_dir = os.path.dirname(__file__)
-        bundle_path = os.path.join(base_dir, "../data_processing/kernel_deepc_bundle.npz")
+        share_dir = get_package_share_directory('nonlinear_deepc_controller')
+        bundle_path = os.path.join(share_dir, 'data', 'kernel_deepc_bundle.npz')
         data = np.load(bundle_path)
         K = data["K"]
-        X_sub = data["X_sub"]
-        Hy_future_sub = data["Hy_future_sub"]
-        best_lambda = float(data["best_lambda"])
-        best_gamma_rbf = float(data["best_gamma_rbf"])
+        X = data["X"]
+        Hy_future = data["Hy_future"]
+        gamma = float(data["gamma"])
+        rbf_scale = float(data["rbf_scale"])
 
         # regularization lambdas
         lambda_g = 1e3
@@ -210,9 +212,9 @@ class OptimizationNode(Node):
         cfg = dict(
             m=m, p=p, T_ini=T_ini, N=N,
             R=R, Q=Q,
-            K = K, X = X_sub, Hy_future = Hy_future_sub,
-            gamma = best_lambda,
-            rbf_scale = best_gamma_rbf,
+            K = K, X = X, Hy_future = Hy_future,
+            gamma = gamma,
+            rbf_scale = rbf_scale,
             lambda_g = lambda_g,
             lambda_k = lambda_k,
         )
