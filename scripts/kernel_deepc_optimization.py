@@ -52,9 +52,10 @@ class KernelDeePCOptimization:
         # Extract Kernel and Hankel matrices
         self.K = self.cfg["K"]
         self.Hc = self.K.shape[0]
+        self.gamma = self.cfg["gamma"]
+        self.Kg = self.K + self.gamma*np.eye(self.Hc)
         self.X = self.cfg["X"]
         self.Hy_future = self.cfg["Hy_future"]
-        self.gamma = self.cfg["gamma"]
         self.rbf_scale = self.cfg["rbf_scale"]
 
         # Regularization weights
@@ -80,14 +81,15 @@ class KernelDeePCOptimization:
         # split X into the two parts used by eq. (36)
         d_ini = self.m*self.T_ini + self.p*self.T_ini
         d_u = self.m*self.N
-        # TODO: verify dimensions (Probably have to pick the columns)
         self.X1 = self.X[:d_ini, :] # columns x1_i
         self.X2 = self.X[d_ini:, :] # columns x2_i
         self.X1_col_norm2 = np.sum(self.X1**2, axis=0) # precompute squared norms of columns of X1
 
         # build k(u_ini, y_ini, u) for the mixed kernel
-        self.k_vec = self.build_k_vector()
-        Kernel_cost = (self.K + self.gamma*np.eye(self.Hc)) @ self.g - self.k_vec
+        self.k_rbf = cp.Parameter(self.Hc) # the RBF part
+        self.k_vec = self.k_rbf + (self.X2.T @ self.u) # affine part
+
+        Kernel_cost = self.Kg @ self.g - self.k_vec
 
         cost = (
             cp.quad_form(self.Hy_future @ self.g, self.Q) +
@@ -116,11 +118,18 @@ class KernelDeePCOptimization:
         self.u_ini.value = u_ini
         self.y_ini.value = y_ini
 
+        # compute RBF term DPP-safe
+        xy_ini = np.hstack([u_ini, y_ini]) # (d_ini,)
+        term_xy = float(np.dot(xy_ini, xy_ini)) # scalar
+        term_ax = self.X1.T @ xy_ini # (Hc,)
+        d2 = self.X1_col_norm2 + term_xy - 2.0*term_ax # (Hc,)
+        self.k_rbf.value = np.exp(-self.rbf_scale * d2) # (Hc,)
+
         start_time = time.perf_counter()
 
         # Solve
         try:
-            self.problem.solve(solver=cp.CLARABEL, warm_start=True, verbose=False)
+            self.problem.solve(solver=cp.OSQP, warm_start=True, verbose=False)
         except Exception as e:
             self.logger.error(f"[DeePCOptimization] Solve error: {e}")
             return None
@@ -141,30 +150,26 @@ class KernelDeePCOptimization:
             out["g_opt"] = np.array(self.g.value).reshape(-1)
         return out
     
-    def build_k_vector(self): # TODO: verify
-        """
-        Returns a CVXPY expression of shape (Hc,) implementing
-        k(u_ini, y_ini, u) from eq. (36):
-            k = exp( - ||x1_i - [u_ini;y_ini]||^2 / (2*sigma^2) ) + x2_i^T u
-        The first term depends only on parameters (u_ini, y_ini);
-        the second is affine in the decision variable u.
-        """
-        # concatenate parameters col(u_ini; y_ini)
-        xy_ini = cp.hstack([self.u_ini, self.y_ini]) # shape (d_ini,)
-
-        # compute squared distances ||x - y||^2 = ||x||^2 + ||y||^2 - 2 x^T y
-        term_xy = cp.sum_squares(xy_ini) * np.ones(self.Hc) # broadcast to shape (Hc,)
-        term_ax = self.X1.T @ xy_ini # shape (Hc,)
-        d2 = self.X1_col_norm2 + term_xy - 2.0*term_ax # elementwise
-
-        # RBF part
-        rbf = cp.exp(-self.rbf_scale * d2) # shape (Hc,)
-
-        # linear part
-        lin_u = self.X2.T @ self.u # shape (Hc,)
-
-        # mixed kernel vector
-        return rbf + lin_u
+    # def build_k_vector(self): # TODO: verify
+    #     """
+    #     Returns a CVXPY expression of shape (Hc,) implementing
+    #     k(u_ini, y_ini, u) from eq. (36):
+    #         k = exp( - ||x1_i - [u_ini;y_ini]||^2 / (2*sigma^2) ) + x2_i^T u
+    #     The first term depends only on parameters (u_ini, y_ini);
+    #     the second is affine in the decision variable u.
+    #     """
+    #     # concatenate parameters col(u_ini; y_ini)
+    #     xy_ini = cp.hstack([self.u_ini, self.y_ini]) # shape (d_ini,)
+    #     # compute squared distances ||x - y||^2 = ||x||^2 + ||y||^2 - 2 x^T y
+    #     term_xy = cp.sum_squares(xy_ini) * np.ones(self.Hc) # broadcast to shape (Hc,)
+    #     term_ax = self.X1.T @ xy_ini # shape (Hc,)
+    #     d2 = self.X1_col_norm2 + term_xy - 2.0*term_ax # elementwise
+    #     # RBF part
+    #     rbf = cp.exp(-self.rbf_scale * d2) # shape (Hc,)
+    #     # linear part
+    #     lin_u = self.X2.T @ self.u # shape (Hc,)
+    #     # mixed kernel vector
+    #     return rbf + lin_u
 
 
 # ROS2 optimization_node
