@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any
 import os
 import time
 from ament_index_python.packages import get_package_share_directory
+from scipy import sparse
 
 # DeePC Optimization class
 class KernelDeePCOptimization:
@@ -46,16 +47,16 @@ class KernelDeePCOptimization:
         self.N = self.cfg["N"]
 
         # Extract cost matrices
-        self.R = self.cfg["R"]
-        self.Q = self.cfg["Q"]
+        self.R = sparse.csr_matrix(self.cfg["R"])
+        self.Q = sparse.csr_matrix(self.cfg["Q"])
 
         # Extract Kernel and Hankel matrices
         self.K = self.cfg["K"]
         self.Hc = self.K.shape[0]
         self.gamma = self.cfg["gamma"]
-        self.Kg = self.K + self.gamma*np.eye(self.Hc)
+        self.Kg = sparse.csr_matrix(self.K + self.gamma*np.eye(self.Hc))
         self.X = self.cfg["X"]
-        self.Hy_future = self.cfg["Hy_future"]
+        self.Hy_future = sparse.csr_matrix(self.cfg["Hy_future"])
         self.rbf_scale = self.cfg["rbf_scale"]
 
         # Regularization weights
@@ -82,7 +83,7 @@ class KernelDeePCOptimization:
         d_ini = self.m*self.T_ini + self.p*self.T_ini
         d_u = self.m*self.N
         self.X1 = self.X[:d_ini, :] # columns x1_i
-        self.X2 = self.X[d_ini:, :] # columns x2_i
+        self.X2 = sparse.csr_matrix(self.X[d_ini:, :]) # columns x2_i
         self.X1_col_norm2 = np.sum(self.X1**2, axis=0) # precompute squared norms of columns of X1
 
         # build k(u_ini, y_ini, u) for the mixed kernel
