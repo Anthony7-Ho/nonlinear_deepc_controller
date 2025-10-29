@@ -10,6 +10,7 @@ import os
 import time
 from ament_index_python.packages import get_package_share_directory
 from scipy import sparse
+from scipy.linalg import cho_factor, cho_solve
 
 # DeePC Optimization class
 class KernelDeePCOptimization:
@@ -65,11 +66,45 @@ class KernelDeePCOptimization:
 
         # Decision variables
         self.u = cp.Variable(self.m * self.N)
-        self.g = cp.Variable(self.Hc)  # size Hc
 
         # Parameters that change online:
-        self.u_ini = cp.Parameter(self.m * self.T_ini)
-        self.y_ini = cp.Parameter(self.p * self.T_ini)
+        self.q_param = cp.Parameter(self.m * self.N)
+
+        # split X into the two parts used by eq. (36)
+        d_ini = self.m*self.T_ini + self.p*self.T_ini
+        self.X1 = self.X[:d_ini, :] # columns x1_i
+        self.X2 = sparse.csr_matrix(self.X[d_ini:, :]) # columns x2_i
+        self.X1_col_norm2 = np.sum(self.X1**2, axis=0) # precompute squared norms of columns of X1
+
+        # -------- Matrices for QP without g --------
+        # A = Hy_future^T Q Hy_future + lambda_g I + lambda_k Kg^T Kg
+        A_dense = (self.Hy_future.T @ self.Q @ self.Hy_future + self.lambda_g * sparse.eye(self.Hc) +self.lambda_k * self.Kg.T @ self.Kg).toarray()
+        self.cf = cho_factor(A_dense, lower=True, check_finite=False)
+        
+        E = self.lambda_k * self.Kg.T
+        # Build M = lambda_k I - E^T A^{-1} E
+        E_dense = E.toarray() # (Hc x Hc)
+        AinvE = cho_solve(self.cf, E_dense, check_finite=False)  # solves A X = E  -> X = A^{-1}E
+        M_dense = self.lambda_k * np.eye(self.Hc) - (E_dense.T @ AinvE)
+
+        M_min_eig = np.linalg.eigvalsh(M_dense).min()
+        self.logger.info(f"[DeePCOptimization] eigmin(M) = {M_min_eig:.3e}")
+
+        # P = R + X2 M X2^T Hessian
+        XM = (self.X2 @ M_dense)  # (mN x Hc)
+        P_dense = self.R.toarray() + XM @ self.X2.T.toarray()  # (mN x mN)
+        P_dense = (P_dense + P_dense.T) / 2.0  # ensure symmetry
+
+        w = np.linalg.eigvalsh(P_dense)
+        lam_min = w.min()
+        self.logger.info(f"[DeePCOptimization] eigmin(P) before bump = {lam_min:.3e}")
+
+        self.P = sparse.csc_matrix(P_dense)
+        self.M_dense = M_dense
+
+        self.E = E.tocsc()
+        self.X2 = self.X2.tocsc()
+        #---------------------------
 
         # Input constraints
         self.constraints = []
@@ -78,29 +113,35 @@ class KernelDeePCOptimization:
         u_min = -u_max
         self.constraints += [ self.u >= u_min, self.u <= u_max]
 
-        # Cost
-        # split X into the two parts used by eq. (36)
-        d_ini = self.m*self.T_ini + self.p*self.T_ini
-        d_u = self.m*self.N
-        self.X1 = self.X[:d_ini, :] # columns x1_i
-        self.X2 = sparse.csr_matrix(self.X[d_ini:, :]) # columns x2_i
-        self.X1_col_norm2 = np.sum(self.X1**2, axis=0) # precompute squared norms of columns of X1
-
-        # build k(u_ini, y_ini, u) for the mixed kernel
-        self.k_rbf = cp.Parameter(self.Hc) # the RBF part
-        self.k_vec = self.k_rbf + (self.X2.T @ self.u) # affine part
-
-        Kernel_cost = self.Kg @ self.g - self.k_vec
-
-        cost = (
-            cp.quad_form(self.Hy_future @ self.g, self.Q) +
-            cp.quad_form(self.u, self.R) +
-            self.lambda_g * cp.sum_squares(self.g) +
-            self.lambda_k * cp.sum_squares(Kernel_cost)
-        )
+        # objective
+        obj = 0.5 * cp.quad_form(self.u, self.P) + self.q_param @ self.u
 
         # Build problem
-        self.problem = cp.Problem(cp.Minimize(cost), self.constraints)
+        self.problem = cp.Problem(cp.Minimize(obj), self.constraints)
+
+        # Shapes sanity
+        self.logger.info(f"shapes: X1={self.X1.shape}, X2={self.X2.shape}, HyF={self.Hy_future.shape}, Kg={self.Kg.shape}")
+
+        # Conditioning of A
+        condA = np.linalg.cond(A_dense)
+        self.logger.info(f"[DeePCOptimization] cond(A) = {condA:.3e}")
+
+
+    def build_k_rbf(self, u_ini: np.ndarray, y_ini: np.ndarray) -> np.ndarray:
+        """DPP-safe RBF term: exp(-rbf_scale * ||x1 - [u_ini;y_ini]||^2) for all columns."""
+        xy_ini = np.hstack([u_ini, y_ini]) # (d_ini,)
+        term_xy = float(xy_ini @ xy_ini) # scalar
+        term_ax = self.X1.T @ xy_ini # (Hc,)
+        d2 = self.X1_col_norm2 + term_xy - 2.0*term_ax # (Hc,)
+        return np.exp(-self.rbf_scale * d2).reshape(-1) # (Hc,)
+    
+    def A_solve(self, B):
+        """Solve A X = B for B shape (Hc,) or (Hc, k). Returns ndarray."""
+        B = np.atleast_2d(B)
+        if B.shape[0] != self.Hc:  # accept (k, Hc) -> transpose
+            B = B.T
+        X = cho_solve(self.cf, B, check_finite=False)
+        return X if X.ndim > 1 else X.reshape(-1,1)
 
 
     def update(self, u_ini: np.ndarray, y_ini: np.ndarray) -> Optional[Dict[str, np.ndarray]]:
@@ -115,16 +156,12 @@ class KernelDeePCOptimization:
             dict with keys like {"u_opt": ..., "g_opt": ..., "status": ...}
             or None if the problem failed.
         """
-        # Update parameters
-        self.u_ini.value = u_ini
-        self.y_ini.value = y_ini
 
-        # compute RBF term DPP-safe
-        xy_ini = np.hstack([u_ini, y_ini]) # (d_ini,)
-        term_xy = float(np.dot(xy_ini, xy_ini)) # scalar
-        term_ax = self.X1.T @ xy_ini # (Hc,)
-        d2 = self.X1_col_norm2 + term_xy - 2.0*term_ax # (Hc,)
-        self.k_rbf.value = np.exp(-self.rbf_scale * d2) # (Hc,)
+        k_rbf = self.build_k_rbf(u_ini=u_ini, y_ini=y_ini) # (Hc,)
+
+        # q = X2 @ (M @ k_rbf)
+        q = self.X2 @ (self.M_dense @ k_rbf) # (mN,)
+        self.q_param.value = np.asarray(q).reshape(-1)
 
         start_time = time.perf_counter()
 
@@ -147,30 +184,13 @@ class KernelDeePCOptimization:
             "status": status,
             "u_opt": np.array(self.u.value).reshape(-1),
         }
-        if self.g is not None and self.g.value is not None:
-            out["g_opt"] = np.array(self.g.value).reshape(-1)
+
+        u_opt = np.array(self.u.value).reshape(-1)
+        self.logger.info(f"[DeePCOptimization] u_opt = {np.round(u_opt, 6)}")
+
+        # if self.g is not None and self.g.value is not None:
+        #     out["g_opt"] = np.array(self.g.value).reshape(-1)
         return out
-    
-    # def build_k_vector(self): # TODO: verify
-    #     """
-    #     Returns a CVXPY expression of shape (Hc,) implementing
-    #     k(u_ini, y_ini, u) from eq. (36):
-    #         k = exp( - ||x1_i - [u_ini;y_ini]||^2 / (2*sigma^2) ) + x2_i^T u
-    #     The first term depends only on parameters (u_ini, y_ini);
-    #     the second is affine in the decision variable u.
-    #     """
-    #     # concatenate parameters col(u_ini; y_ini)
-    #     xy_ini = cp.hstack([self.u_ini, self.y_ini]) # shape (d_ini,)
-    #     # compute squared distances ||x - y||^2 = ||x||^2 + ||y||^2 - 2 x^T y
-    #     term_xy = cp.sum_squares(xy_ini) * np.ones(self.Hc) # broadcast to shape (Hc,)
-    #     term_ax = self.X1.T @ xy_ini # shape (Hc,)
-    #     d2 = self.X1_col_norm2 + term_xy - 2.0*term_ax # elementwise
-    #     # RBF part
-    #     rbf = cp.exp(-self.rbf_scale * d2) # shape (Hc,)
-    #     # linear part
-    #     lin_u = self.X2.T @ self.u # shape (Hc,)
-    #     # mixed kernel vector
-    #     return rbf + lin_u
 
 
 # ROS2 optimization_node
@@ -197,8 +217,8 @@ class OptimizationNode(Node):
         N = self.get_parameter("N").value
 
         # TODO: Tune cost matrices
-        R = np.eye(m * N) * 1e-3
-        Q = np.eye(p * N) * 1.0
+        R = np.eye(m * N) * 1e-1
+        Q = np.eye(p * N) * 1e2
 
         # Load Kernel gram matrix and Hankel matrices
         share_dir = get_package_share_directory('nonlinear_deepc_controller')
@@ -211,8 +231,8 @@ class OptimizationNode(Node):
         rbf_scale = float(data["rbf_scale"])
 
         # regularization lambdas
-        lambda_g = 1e3
-        lambda_k = 1e4
+        lambda_g = 1e7
+        lambda_k = 1e3
 
 
         cfg = dict(
