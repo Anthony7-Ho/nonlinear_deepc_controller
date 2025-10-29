@@ -1,9 +1,18 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    RegisterEventHandler,
+    EmitEvent,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
+from launch_ros.actions import Node, LifecycleNode
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.event_handlers import OnStateTransition
+from launch_ros.events.lifecycle import ChangeState
+from launch.events import matches_action
+from lifecycle_msgs.msg import Transition
 
 
 def generate_launch_description():
@@ -52,6 +61,36 @@ def generate_launch_description():
         }.items()
     )
 
+    # Optimizer LifecycleNode
+    optimizer = LifecycleNode(
+        package='nonlinear_deepc_controller',
+        executable='kernel_deepc_optimization.py',
+        name='optimization_node',
+        output='screen',
+        namespace='',
+    )
+
+    # Ask optimizer to CONFIGURE once it's started
+    request_configure = EmitEvent(event = ChangeState(
+        lifecycle_node_matcher=matches_action(optimizer),
+        transition_id=Transition.TRANSITION_CONFIGURE
+    ))
+
+    # Prepare an ACTIVATE event (we'll trigger this only after it reaches 'inactive')
+    request_activate = EmitEvent(event = ChangeState(
+        lifecycle_node_matcher=matches_action(optimizer),
+        transition_id=Transition.TRANSITION_ACTIVATE
+    ))
+
+    # When optimizer reaches 'inactive' (configured), send ACTIVATE
+    activate_when_configured = RegisterEventHandler(
+        OnStateTransition(
+            target_lifecycle_node=optimizer,
+            goal_state='inactive',
+            entities=[request_activate]
+        )
+    )
+
     # Spawn controller
     # Instance name: joint_impedance_controller
     # Type: must match plugin class name in the XML:
@@ -67,17 +106,21 @@ def generate_launch_description():
         arguments=spawner_args,
         output='screen',
     )
-    # Optimization node
-    optimizer = Node(
-        package='nonlinear_deepc_controller',
-        executable='kernel_deepc_optimization.py',
-        name='optimization_node',
-        output='screen',
+
+    # Gate spawner start on optimizer reaching 'active'
+    start_spawner_when_optimizer_active = RegisterEventHandler(
+        OnStateTransition(
+            target_lifecycle_node=optimizer,
+            goal_state='active',
+            entities=[spawner]
+        )
     )
 
     return LaunchDescription([
         robot_ip_arg, arm_id_arg, use_rviz_arg, use_fake_hw_arg, fake_sensor_cmds_arg, load_gripper_arg,
         franka_bringup_launch,
-        spawner,
-        optimizer
+        optimizer,
+        request_configure,
+        activate_when_configured,
+        start_spawner_when_optimizer_active,
     ])
