@@ -2,6 +2,9 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
+from rclpy.qos import QoSProfile
+from rclpy.lifecycle import LifecycleNode
+from rclpy.lifecycle import TransitionCallbackReturn as TCR
 
 import numpy as np
 import cvxpy as cp
@@ -88,7 +91,7 @@ class KernelDeePCOptimization:
         M_dense = self.lambda_k * np.eye(self.Hc) - (E_dense.T @ AinvE)
 
         M_min_eig = np.linalg.eigvalsh(M_dense).min()
-        self.logger.info(f"[DeePCOptimization] eigmin(M) = {M_min_eig:.3e}")
+        # self.logger.info(f"[DeePCOptimization] eigmin(M) = {M_min_eig:.3e}")
 
         # P = R + X2 M X2^T Hessian
         XM = (self.X2 @ M_dense)  # (mN x Hc)
@@ -97,7 +100,7 @@ class KernelDeePCOptimization:
 
         w = np.linalg.eigvalsh(P_dense)
         lam_min = w.min()
-        self.logger.info(f"[DeePCOptimization] eigmin(P) before bump = {lam_min:.3e}")
+        # self.logger.info(f"[DeePCOptimization] eigmin(P) before bump = {lam_min:.3e}")
 
         self.P = sparse.csc_matrix(P_dense)
         self.M_dense = M_dense
@@ -120,11 +123,11 @@ class KernelDeePCOptimization:
         self.problem = cp.Problem(cp.Minimize(obj), self.constraints)
 
         # Shapes sanity
-        self.logger.info(f"shapes: X1={self.X1.shape}, X2={self.X2.shape}, HyF={self.Hy_future.shape}, Kg={self.Kg.shape}")
+        # self.logger.info(f"shapes: X1={self.X1.shape}, X2={self.X2.shape}, HyF={self.Hy_future.shape}, Kg={self.Kg.shape}")
 
         # Conditioning of A
         condA = np.linalg.cond(A_dense)
-        self.logger.info(f"[DeePCOptimization] cond(A) = {condA:.3e}")
+        # self.logger.info(f"[DeePCOptimization] cond(A) = {condA:.3e}")
 
 
     def build_k_rbf(self, u_ini: np.ndarray, y_ini: np.ndarray) -> np.ndarray:
@@ -193,11 +196,13 @@ class KernelDeePCOptimization:
         return out
 
 
-# ROS2 optimization_node
-class OptimizationNode(Node):
+# ROS2 optimization Node
+class OptimizationNode(LifecycleNode):
     """
-    ROS 2 node that listens for u_ini and y_ini, runs the kernel DeePC optimization,
-    and publishes the first control move.
+    Lifecycle version:
+      - Heavy init (loading data, building optimizer) in on_configure()
+      - Start I/O (pub/sub) in on_activate()
+      - Clean up in on_deactivate()/on_cleanup()/on_shutdown()
     """
 
     def __init__(self):
@@ -211,56 +216,136 @@ class OptimizationNode(Node):
         self.declare_parameter("topic_init", "/deepc/init")  # combined message [u_ini ; y_ini]
         self.declare_parameter("publish_topic_u", "/deepc/u_opt")
 
-        m = self.get_parameter("m").value
-        p = self.get_parameter("p").value
-        T_ini = self.get_parameter("T_ini").value
-        N = self.get_parameter("N").value
+        # Placeholders created in states
+        self.optimizer: Optional[KernelDeePCOptimization] = None
+        self.sub_init = None
+        self.pub_u = None
 
-        # TODO: Tune cost matrices
-        R = np.eye(m * N) * 1e-1
-        Q = np.eye(p * N) * 1e2
+        self._qos = QoSProfile(depth = 10)
 
-        # Load Kernel gram matrix and Hankel matrices
-        share_dir = get_package_share_directory('nonlinear_deepc_controller')
-        bundle_path = os.path.join(share_dir, 'data', 'kernel_deepc_bundle.npz')
-        data = np.load(bundle_path)
-        K = data["K"]
-        X = data["X"]
-        Hy_future = data["Hy_future"]
-        gamma = float(data["gamma"])
-        rbf_scale = float(data["rbf_scale"])
+    # --- Lifecycle state handlers ---
 
-        # regularization lambdas
-        lambda_g = 1e7
-        lambda_k = 1e3
+    def on_configure(self, state) -> TCR:
+        """
+        Build all heavy objects here. If this returns SUCCESS,
+        launch will then request ACTIVATE.
+        """
+        try:
+            # Read params
+            m = int(self.get_parameter("m").value)
+            p = int(self.get_parameter("p").value)
+            T_ini = int(self.get_parameter("T_ini").value)
+            N = int(self.get_parameter("N").value)
 
+            topic_init = self.get_parameter("topic_init").value
+            publish_topic_u = self.get_parameter("publish_topic_u").value
 
-        cfg = dict(
-            m=m, p=p, T_ini=T_ini, N=N,
-            R=R, Q=Q,
-            K = K, X = X, Hy_future = Hy_future,
-            gamma = gamma,
-            rbf_scale = rbf_scale,
-            lambda_g = lambda_g,
-            lambda_k = lambda_k,
-        )
-        self.optimizer = KernelDeePCOptimization(cfg, logger=self.get_logger())
+            self._topic_init = topic_init
+            self._publish_topic_u = publish_topic_u
 
-        # Subscriber for combined init vector [u_ini ; y_ini]
-        topic_init = self.get_parameter("topic_init").value
-        self.sub_init = self.create_subscription(Float64MultiArray, topic_init, self.cb_init, 10)
+            # Cost matrices
+            R = np.eye(m * N) * 1e-1
+            Q = np.eye(p * N) * 1e2
 
-        # Publisher for the first control move u0 (or full sequence if you prefer)
-        self.pub_u = self.create_publisher(Float64MultiArray, self.get_parameter("publish_topic_u").value, 10)
+            # Load data from share
+            share_dir = get_package_share_directory("nonlinear_deepc_controller")
+            bundle_path = os.path.join(share_dir, "data", "kernel_deepc_bundle.npz")
+            data = np.load(bundle_path)
+            K = data["K"]
+            X = data["X"]
+            Hy_future = data["Hy_future"]
+            gamma = float(data["gamma"])
+            rbf_scale = float(data["rbf_scale"])
 
-        self.get_logger().info("optimization_node up. Waiting for /deepc/init (Float64MultiArray: [u_ini ; y_ini]).")
+            lambda_g = 1e7
+            lambda_k = 1e3
+
+            cfg = dict(
+                m=m, p=p, T_ini=T_ini, N=N,
+                R=R, Q=Q,
+                K=K, X=X, Hy_future=Hy_future,
+                gamma=gamma,
+                rbf_scale=rbf_scale,
+                lambda_g=lambda_g,
+                lambda_k=lambda_k,
+            )
+            # Heavy construction here
+            self.optimizer = KernelDeePCOptimization(cfg, logger=self.get_logger())
+
+            self.get_logger().info("Configured optimizer (INACTIVE).")
+            return TCR.SUCCESS
+
+        except Exception as e:
+            self.get_logger().error(f"on_configure() failed: {e}")
+            return TCR.FAILURE
+
+    def on_activate(self, state) -> TCR:
+        """
+        Create publishers/subscribers/timers here so the node only starts I/O when ACTIVE.
+        """
+        try:
+            # Publisher for u_opt
+            self.pub_u = self.create_publisher(
+                Float64MultiArray, self._publish_topic_u, self._qos
+            )
+            # Subscriber for [u_ini; y_ini]
+            self.sub_init = self.create_subscription(
+                Float64MultiArray, self._topic_init, self.cb_init, self._qos
+            )
+
+            self.get_logger().info("optimization Node is ACTIVE. Waiting for init data")
+            return TCR.SUCCESS
+
+        except Exception as e:
+            self.get_logger().error(f"on_activate() failed: {e}")
+            return TCR.FAILURE
+
+    def on_deactivate(self, state) -> TCR:
+        """
+        Stop I/O but keep configuration/optimizer in memory.
+        """
+        try:
+            # Destroy I/O entities 
+            if self.sub_init is not None:
+                self.destroy_subscription(self.sub_init)
+                self.sub_init = None
+            if self.pub_u is not None:
+                self.destroy_publisher(self.pub_u)
+                self.pub_u = None
+
+            self.get_logger().info("optimization Node DEACTIVATED.")
+            return TCR.SUCCESS
+        except Exception as e:
+            self.get_logger().error(f"on_deactivate() failed: {e}")
+            return TCR.FAILURE
+
+    def on_cleanup(self, state) -> TCR:
+        """
+        Free heavy resources; node goes back to UNCONFIGURED.
+        """
+        try:
+            self.optimizer = None
+            self.get_logger().info("optimization Node CLEANED UP.")
+            return TCR.SUCCESS
+        except Exception as e:
+            self.get_logger().error(f"on_cleanup() failed: {e}")
+            return TCR.FAILURE
+
+    def on_shutdown(self, state) -> TCR:
+        self.get_logger().info("optimization Node SHUTDOWN.")
+        return TCR.SUCCESS
+
+    # --- Subscriber callback -------
 
     def cb_init(self, msg: Float64MultiArray):
-        """
-        Callback function, expects data shaped as a flat vector [u_ini ; y_ini]
-        where u_ini has length m*T_ini and y_ini has length p*T_ini.
-        """
-        m, p, T_ini, N = self.optimizer.m, self.optimizer.p, self.optimizer.cfg["T_ini"], self.optimizer.N
+        if self.optimizer is None:
+            self.get_logger().warn("Received init but optimizer not ready.")
+            return
+
+        m = self.optimizer.m
+        p = self.optimizer.p
+        T_ini = self.optimizer.cfg["T_ini"]
+
         arr = np.array(msg.data, dtype=float).reshape(-1)
         expected = m * T_ini + p * T_ini
         if arr.size != expected:
@@ -270,18 +355,19 @@ class OptimizationNode(Node):
         u_ini = arr[: m * T_ini]
         y_ini = arr[m * T_ini : m * T_ini + p * T_ini]
 
-        # Run the optimization
         result = self.optimizer.update(u_ini=u_ini, y_ini=y_ini)
         if result is None:
             self.get_logger().warn("Optimization failed or infeasible.")
             return
 
         u_opt = result["u_opt"]
-        # Publish u0 (first m entries) so the low-level controller can apply it
         u0 = u_opt[:m]
         out = Float64MultiArray(data=u0.tolist())
-        self.pub_u.publish(out)
-        self.get_logger().info(f"Optimization status: {result['status']}. Published u0 with shape {u0.shape}.")
+        if self.pub_u is not None:
+            self.pub_u.publish(out)
+        self.get_logger().info(
+            f"Optimization status: {result['status']}. Published u0 with shape {u0.shape}."
+        )
 
 
 def main():
