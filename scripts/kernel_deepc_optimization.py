@@ -72,6 +72,7 @@ class KernelDeePCOptimization:
 
         # Parameters that change online:
         self.q_param = cp.Parameter(self.m * self.N)
+        self.u_ref = cp.Parameter(self.m * self.N)
 
         # split X into the two parts used by eq. (36)
         d_ini = self.m*self.T_ini + self.p*self.T_ini
@@ -117,7 +118,7 @@ class KernelDeePCOptimization:
         self.constraints += [ self.u >= u_min, self.u <= u_max]
 
         # objective
-        obj = 0.5 * cp.quad_form(self.u, self.P) + self.q_param @ self.u
+        obj = 0.5 * cp.quad_form(self.u - self.u_ref, self.P) + self.q_param @ self.u
 
         # Build problem
         self.problem = cp.Problem(cp.Minimize(obj), self.constraints)
@@ -147,13 +148,14 @@ class KernelDeePCOptimization:
         return X if X.ndim > 1 else X.reshape(-1,1)
 
 
-    def update(self, u_ini: np.ndarray, y_ini: np.ndarray) -> Optional[Dict[str, np.ndarray]]:
+    def update(self, u_ini: np.ndarray, y_ini: np.ndarray, u_ref: Optional[np.ndarray] = None) -> Optional[Dict[str, np.ndarray]]:
         """
         Refresh Parameters from latest (u_ini, y_ini), rebuild objective and solve.
 
         Args:
             u_ini: array of shape (m*T_ini,)
             y_ini: array of shape (p*T_ini,)
+            u_ref: optional reference input trajectory of shape (m*N,)
 
         Returns:
             dict with keys like {"u_opt": ..., "g_opt": ..., "status": ...}
@@ -165,6 +167,11 @@ class KernelDeePCOptimization:
         # q = X2 @ (M @ k_rbf)
         q = self.X2 @ (self.M_dense @ k_rbf) # (mN,)
         self.q_param.value = np.asarray(q).reshape(-1)
+
+        if u_ref is None:
+            self.u_ref.value = np.zeros(self.m * self.N)
+        else:
+            self.u_ref.value = u_ref.reshape(-1)
 
         start_time = time.perf_counter()
 
@@ -213,7 +220,7 @@ class OptimizationNode(LifecycleNode):
         self.declare_parameter("p", 7) # outputs 
         self.declare_parameter("T_ini", 40) # past horizon
         self.declare_parameter("N", 8) # prediction horizon
-        self.declare_parameter("topic_init", "/deepc/init")  # combined message [u_ini ; y_ini]
+        self.declare_parameter("topic_init", "/deepc/init")  # combined message [u_ini ; y_ini; u_ref]
         self.declare_parameter("publish_topic_u", "/deepc/u_opt")
 
         # Placeholders created in states
@@ -345,17 +352,25 @@ class OptimizationNode(LifecycleNode):
         m = self.optimizer.m
         p = self.optimizer.p
         T_ini = self.optimizer.cfg["T_ini"]
+        N = self.optimizer.cfg["N"]
 
         arr = np.array(msg.data, dtype=float).reshape(-1)
-        expected = m * T_ini + p * T_ini
+        len_uini = m * T_ini
+        len_yini = p * T_ini
+        len_uref = m * N
+        expected = len_uini + len_yini + len_uref
         if arr.size != expected:
             self.get_logger().error(f"/deepc/init length {arr.size} != expected {expected}.")
             return
 
-        u_ini = arr[: m * T_ini]
-        y_ini = arr[m * T_ini : m * T_ini + p * T_ini]
+        u_ini = arr[:len_uini]
+        y_ini = arr[len_uini:len_uini + len_yini]
+        u_ref = arr[len_uini + len_yini:]
 
-        result = self.optimizer.update(u_ini=u_ini, y_ini=y_ini)
+        if u_ref.size == m:
+            u_ref = np.tile(u_ref, self.optimizer.N)
+
+        result = self.optimizer.update(u_ini=u_ini, y_ini=y_ini, u_ref=u_ref)
         if result is None:
             self.get_logger().warn("Optimization failed or infeasible.")
             return
