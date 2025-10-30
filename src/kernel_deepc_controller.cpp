@@ -247,15 +247,14 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
       Vector7d q_des = interp(q_traj_, elapsed_time_);
       Vector7d dq_des = dq_traj_.empty() ? Vector7d::Zero() : interp(dq_traj_, elapsed_time_);
       Vector7d tau_imp = k_gains_.cwiseProduct(q_des - q_) + d_gains_.cwiseProduct(dq_des - dq_filtered_);
+      last_tau_imp_ = tau_imp;
 
       time_since_uopt_ += period.seconds();
       double alpha = alpha_max_ * std::exp(-time_since_uopt_ / alpha_decay_seconds_);
       if (alpha < 0.0) alpha = 0.0;
       if (alpha > alpha_max_) alpha = alpha_max_;
 
-      Vector7d tau_residual = latest_u_opt_ - tau_imp;
-
-      tau_cmd = tau_imp + alpha * tau_residual;
+      tau_cmd = (1 - alpha) * tau_imp + alpha * latest_u_opt_;
 
       // update histories with one-step delay
       pushHistories(prev_tau_applied_, tau_ext);
@@ -411,8 +410,10 @@ void KernelDeePCController::publishInit(const char* reason) {
     return;
   }
 
+  const int N = 8; //TODO: Should be same as prediction horizon in optimizer
+
   std_msgs::msg::Float64MultiArray msg;
-  msg.data.reserve(7 * T_ini_ * 2);
+  msg.data.reserve(7 * T_ini_ * 2 + 7 * N);
 
   // u_ini: oldest -> newest
   for (const auto& u : u_hist_) {
@@ -423,8 +424,16 @@ void KernelDeePCController::publishInit(const char* reason) {
     for (int j = 0; j < num_joints; ++j) msg.data.push_back(y(j));
   }
 
+  // u_ref := current impedance torque, tiled over N
+  for (int k = 0; k < N; ++k) {
+    for (int j = 0; j < num_joints; ++j) {
+      msg.data.push_back(last_tau_imp_(j));
+    }
+      
+  }
+  
   init_pub_->publish(msg);
-  RCLCPP_INFO(get_node()->get_logger(), "Published [u_ini; y_ini] (%s).", reason);
+  RCLCPP_INFO(get_node()->get_logger(), "Published [u_ini; y_ini; u_ref] (%s).", reason);
 }
 
 void KernelDeePCController::uoptCallback(const std_msgs::msg::Float64MultiArray& msg) {
@@ -449,7 +458,7 @@ void KernelDeePCController::uoptCallback(const std_msgs::msg::Float64MultiArray&
     RCLCPP_INFO(get_node()->get_logger(), "u_opt received. Transition to TRACKING.");
   }
 
-  // On each new u_opt, publish the current [u_ini; y_ini] for the solver
+  // On each new u_opt, publish the current [u_ini; y_ini; u_ref] for the solver
   if (static_cast<int>(u_hist_.size()) >= T_ini_ && static_cast<int>(y_hist_.size()) >= T_ini_) {
     publishInit("u_opt_callback");
   }

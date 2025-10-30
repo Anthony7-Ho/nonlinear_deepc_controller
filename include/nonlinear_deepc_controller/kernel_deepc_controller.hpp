@@ -75,6 +75,7 @@ class KernelDeePCController final : public controller_interface::ControllerInter
   std::deque<Vector7d> u_hist_; // applied torque history
   std::deque<Vector7d> y_hist_; // measured tau_ext history
   Vector7d prev_tau_applied_{Vector7d::Zero()}; // u_{k-1}
+  Vector7d last_tau_imp_{Vector7d::Zero()};
 
   // DeePC IO
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr init_pub_;
@@ -108,7 +109,7 @@ class KernelDeePCController final : public controller_interface::ControllerInter
   bool warmupStep(const Vector7d& tau_ext); // push one warmup sample; return true when full
   void pushHistories(const Vector7d& u_prev, // push u_{k-1}, y_k during tracking
                      const Vector7d& y_curr);
-  void publishInit(const char* reason); // publish [u_ini; y_ini]
+  void publishInit(const char* reason); // publish [u_ini; y_ini; u_ref]
 
   void uoptCallback(const std_msgs::msg::Float64MultiArray& msg);
 };
