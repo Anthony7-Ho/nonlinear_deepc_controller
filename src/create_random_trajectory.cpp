@@ -5,6 +5,8 @@
 #include <moveit_msgs/msg/robot_trajectory.hpp>
 #include <moveit/robot_state/robot_state.h>
 #include <moveit/robot_state/conversions.h>
+#include <moveit/planning_scene/planning_scene.h>
+#include <moveit/collision_detection/collision_common.h>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include <builtin_interfaces/msg/duration.hpp>
@@ -21,7 +23,7 @@ static const std::string GROUP_NAME = "fr3_arm";
 static const std::string EEF_LINK = "fr3_hand_tcp";
 static const std::string BASE_FRAME = "fr3_link0";
 static const int N_WAYPOINTS = 12; // number of random waypoints to generate
-static const double DWELL_SEC = 0.20; // seconds to dwell at each waypoint
+static const double DWELL_SEC = 0.30; // seconds to dwell at each waypoint
 
 
 // Box in BASE_FRAME where random poses are sampled:
@@ -48,26 +50,36 @@ inline builtin_interfaces::msg::Duration add_duration(
   return out;
 }
 
-// Append src trajectory into dst, shifting src by t_offset = last(dst).time_from_start
-static void append_trajectory(moveit_msgs::msg::RobotTrajectory &dst, const moveit_msgs::msg::RobotTrajectory &src)
+// Append source (src) trajectory into destination (dst), shifting src by t_offset = last(dst).time_from_start
+static void append_trajectory(moveit_msgs::msg::RobotTrajectory &dst,
+                              const moveit_msgs::msg::RobotTrajectory &src,
+                              bool skip_first_src_point = true)
 {
-  if (src.joint_trajectory.points.empty()) return;
+  const auto &src_jt = src.joint_trajectory;
+  if (src_jt.points.empty()) return;
 
-  if (dst.joint_trajectory.joint_names.empty())
-    dst.joint_trajectory.joint_names = src.joint_trajectory.joint_names;
+  if (dst.joint_trajectory.joint_names.empty()) dst.joint_trajectory.joint_names = src_jt.joint_names;
+
+  // 1 ms gap to guarantee strictly increasing times at the seam
+  constexpr double EPS_GAP = 1e-3;
 
   rclcpp::Duration t_offset(0, 0);
-  if (!dst.joint_trajectory.points.empty()) {
-    const auto &last = dst.joint_trajectory.points.back().time_from_start;
-    t_offset = rclcpp::Duration(last); // convert to rclcpp::Duration
+  if (!dst.joint_trajectory.points.empty()){
+    t_offset = rclcpp::Duration(dst.joint_trajectory.points.back().time_from_start) + rclcpp::Duration::from_seconds(EPS_GAP);
   }
 
-  for (auto pt : src.joint_trajectory.points) {
-    if (t_offset > rclcpp::Duration(0, 0))
+  const bool skip = skip_first_src_point && !dst.joint_trajectory.points.empty();
+  const std::size_t start_idx = skip ? 1 : 0;
+
+  for (std::size_t i = start_idx; i < src_jt.points.size(); ++i) {
+    auto pt = src_jt.points[i];
+    if (t_offset > rclcpp::Duration(0, 0)) {
       pt.time_from_start = add_duration(pt.time_from_start, t_offset);
+    }
     dst.joint_trajectory.points.push_back(std::move(pt));
   }
 }
+
 
 // Generate a random pose within the defined box and with random orientation
 static geometry_msgs::msg::PoseStamped random_pose()
@@ -111,24 +123,23 @@ static void append_dwell(moveit_msgs::msg::RobotTrajectory &traj, double dwell_s
   const auto &last = traj.joint_trajectory.points.back();
   const size_t nq = last.positions.size();
 
-  // Build a tiny trajectory that contains a single point at t = dwell_sec
   moveit_msgs::msg::RobotTrajectory hold;
   hold.joint_trajectory.joint_names = traj.joint_trajectory.joint_names;
 
   trajectory_msgs::msg::JointTrajectoryPoint p;
-  p.positions = last.positions;                 // same pose
-  p.velocities.assign(nq, 0.0);                 // zero velocity
-  p.accelerations.assign(nq, 0.0);              // zero accel (optional)
+  p.positions = last.positions;
+  p.velocities.assign(nq, 0.0);
+  p.accelerations.assign(nq, 0.0);
+
+  // dwell
   p.time_from_start.sec = static_cast<int32_t>(std::floor(dwell_sec));
-  p.time_from_start.nanosec =
-      static_cast<uint32_t>((dwell_sec - std::floor(dwell_sec)) * 1e9);
+  p.time_from_start.nanosec = static_cast<uint32_t>((dwell_sec - std::floor(dwell_sec)) * 1e9);
 
   hold.joint_trajectory.points.push_back(p);
 
-  // Stitch the hold after existing traj (append_trajectory handles time offset)
-  append_trajectory(traj, hold);
+  // Don't skip the first source point when appending a dwell
+  append_trajectory(traj, hold, /*skip_first_src_point=*/false);
 }
-
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
@@ -141,6 +152,8 @@ int main(int argc, char **argv) {
 
   // MoveGroup interface
   moveit::planning_interface::MoveGroupInterface move_group(node, GROUP_NAME);
+  auto robot_model = move_group.getRobotModel();
+  planning_scene::PlanningScene planning_scene(robot_model);
   move_group.setPoseReferenceFrame(BASE_FRAME);
   move_group.setEndEffectorLink(EEF_LINK);
   move_group.setPlanningPipelineId("ompl");
@@ -171,49 +184,109 @@ int main(int argc, char **argv) {
   moveit_msgs::msg::RobotTrajectory combined;
   int planned_and_executed = 0;
 
-  // Plan and execute each segment in sequence
+  // Track the start state for each next segment
+  auto start_state_ptr = move_group.getCurrentState(1.0);
+  moveit::core::RobotState last_state = start_state_ptr ? *start_state_ptr : moveit::core::RobotState(move_group.getRobotModel());
+  if (!start_state_ptr) last_state.setToDefaultValues();
+  const moveit::core::JointModelGroup* jmg = move_group.getRobotModel()->getJointModelGroup(GROUP_NAME);
+
+  // Plan all segments first, then execute once
   for (size_t i = 0; i < waypoints.size(); ++i) {
-    // random per-segment velocity scaling
     const double vel_scale = vel_dist(gen);
     move_group.setMaxVelocityScalingFactor(vel_scale);
     RCLCPP_INFO(logger, "Segment %zu: velocity scaling = %.3f", i, vel_scale);
 
-    // plan from current state to next random waypoint
-    move_group.setStartStateToCurrentState();
+    move_group.setStartState(last_state);
+
+    const std::size_t MAX_IK_RETRIES = 25;
+
+    geometry_msgs::msg::PoseStamped target = waypoints[i]; // start from the pre-sampled pose
+    bool ik_ok = false;
+    // Try multiple times to get a valid IK + collision-free pose
+    for (std::size_t tries = 0; tries < MAX_IK_RETRIES; ++tries) {
+      moveit::core::RobotState probe = last_state;
+      ik_ok = probe.setFromIK(jmg, target.pose, EEF_LINK, 0.05);
+      if (!ik_ok) { target = random_pose(); continue; }
+
+      collision_detection::CollisionRequest req;
+      collision_detection::CollisionResult res;
+      planning_scene.checkSelfCollision(req, res, probe);
+
+      if (!res.collision) {
+        waypoints[i] = target;
+        break;
+      }
+      // colliding: resample
+      target = random_pose();
+    }
+
+    if (!ik_ok) {
+      RCLCPP_WARN(logger, "Segment %zu: IK failed after %zu retries; skipping segment.", i, MAX_IK_RETRIES);
+      move_group.clearPoseTargets();
+      continue;  // skip if all retries failed
+    }
+
     move_group.setPoseTarget(waypoints[i].pose, EEF_LINK);
 
     moveit::planning_interface::MoveGroupInterface::Plan plan;
-    const bool ok =
-        (move_group.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+    const bool ok = (move_group.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
     if (!ok || plan.trajectory_.joint_trajectory.points.empty()) {
       RCLCPP_WARN(logger, "Segment %zu: planning failed.", i);
       continue;
     }
 
-    const auto npts = plan.trajectory_.joint_trajectory.points.size();
-    RCLCPP_INFO(logger, "Segment %zu: planned %zu points. Executing...", i, npts);
-
-    // Execute this segment + dwell
-    moveit_msgs::msg::RobotTrajectory seg_with_dwell = plan.trajectory_;
-
-    // add a dwell time after the end of this segment so the robot stays still
-    append_dwell(seg_with_dwell, DWELL_SEC);
-
-    // Execute segment
-    const bool exec_ok =
-        (move_group.execute(seg_with_dwell) == moveit::core::MoveItErrorCode::SUCCESS);
-    if (!exec_ok) {
-      RCLCPP_WARN(logger, "Segment %zu: execution failed.", i);
-      continue;
+    // motion ends with zero velocity/acceleration
+    auto &pts = plan.trajectory_.joint_trajectory.points;
+    if (!pts.empty()) {
+      auto &last = pts.back();
+      std::fill(last.velocities.begin(), last.velocities.end(), 0.0);
+      std::fill(last.accelerations.begin(), last.accelerations.end(), 0.0);
     }
 
-    // accumulate for logging/visualization
-    append_trajectory(combined, seg_with_dwell);
+    // Add a dwell
+    append_dwell(plan.trajectory_, DWELL_SEC);
+
+    const auto &pts_after = plan.trajectory_.joint_trajectory.points;
+    if (!pts_after.empty()) {
+      const auto &q_end = pts_after.back().positions;
+      last_state.setJointGroupPositions(jmg, q_end);
+      last_state.update();
+    }
+
+    // Stitch into combined trajectory
+    append_trajectory(combined, plan.trajectory_, true);
     ++planned_and_executed;
 
     move_group.clearPoseTargets();
   }
+
+  // Execute the combined trajectory once at the end
+  if (!combined.joint_trajectory.points.empty()) {
+    RCLCPP_INFO(logger, "Executing combined trajectory with %zu points...", combined.joint_trajectory.points.size());
+
+    // Wrap combined trajectory as a MoveGroup plan
+    moveit::planning_interface::MoveGroupInterface::Plan big_plan;
+    big_plan.trajectory_ = combined;
+
+    // Visualize before execution
+    moveit_msgs::msg::DisplayTrajectory disp_msg;
+    disp_msg.model_id = move_group.getRobotModel()->getName();
+    if (auto current_ptr = move_group.getCurrentState(0.5))
+      moveit::core::robotStateToRobotStateMsg(*current_ptr, disp_msg.trajectory_start);
+    disp_msg.trajectory.push_back(combined);
+    disp_pub->publish(disp_msg);
+    RCLCPP_INFO(logger, "Published combined trajectory preview to /display_planned_path");
+
+    // Execute the entire path once
+    const bool exec_ok = (move_group.execute(big_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+
+    if (exec_ok)
+      RCLCPP_INFO(logger, "Execution complete!");
+    else
+      RCLCPP_ERROR(logger, "Execution failed!");
+  }
+
 
   if (combined.joint_trajectory.points.empty()) {
     RCLCPP_ERROR(logger, "No successful segments executed. Try adjusting bounds or planning settings.");
@@ -251,7 +324,7 @@ int main(int argc, char **argv) {
     for (const auto &pt : jt.points) {
       const double t = static_cast<double>(pt.time_from_start.sec) + static_cast<double>(pt.time_from_start.nanosec) * 1e-9;
 
-      ofs << std::setprecision(6) << t << std::setprecision(9);
+      ofs << std::setprecision(9) << t << std::setprecision(9);
 
       if (!pt.positions.empty()){
         for (auto v : pt.positions) {
