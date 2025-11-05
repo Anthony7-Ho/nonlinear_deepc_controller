@@ -39,9 +39,9 @@ CallbackReturn KernelDeePCController::on_init() {
     auto_declare<std::string>("arm_id", "fr3");
     auto_declare<std::vector<double>>("k_gains", {24,24,24,24,10,6,2});
     auto_declare<std::vector<double>>("d_gains", {2,2,2,1,1,1,0.5});
-    auto_declare<std::string>("csv_path", std::string(std::getenv("HOME")) + "/trajectory_export.csv");
+    auto_declare<std::string>("csv_path", std::string(std::getenv("HOME")) + "/trajectory_export.csv"); //TODO: change path
     auto_declare<std::string>("log_path",
-      std::string(std::getenv("HOME")) + "/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_ext_test.csv");
+      std::string(std::getenv("HOME")) + "/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_ext_test.csv"); //TODO: change path
     auto_declare<std::string>("robot_state_topic", "/franka_robot_state_broadcaster/robot_state");
 
     // DeePC topics + window

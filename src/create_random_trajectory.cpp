@@ -36,7 +36,7 @@ static const double VEL_MAX = 0.15;
 static const double ACC_SCALE = 0.10;
 
 static const std::string CSV_OUT =
-    std::string(std::getenv("HOME")) + "/trajectory_export.csv";
+    std::string(std::getenv("HOME")) + "/trajectory_export.csv"; //TODO: change path
 
 // Convert builtin Duration + rclcpp::Duration -> builtin Duration
 inline builtin_interfaces::msg::Duration add_duration(
