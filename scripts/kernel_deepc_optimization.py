@@ -112,7 +112,7 @@ class KernelDeePCOptimization:
 
         # Input constraints
         self.constraints = []
-        u_max_per_joint = np.array([87, 87, 87, 87, 12, 12, 12], dtype=float)
+        u_max_per_joint = np.array([1, 1, 1, 1, 1, 1, 1], dtype=float) # TODO: tune?
         u_max = np.tile(u_max_per_joint, self.N)
         u_min = -u_max
         self.constraints += [ self.u >= u_min, self.u <= u_max]

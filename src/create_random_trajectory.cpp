@@ -22,7 +22,7 @@
 static const std::string GROUP_NAME = "fr3_arm";
 static const std::string EEF_LINK = "fr3_hand_tcp";
 static const std::string BASE_FRAME = "fr3_link0";
-static const int N_WAYPOINTS = 12; // number of random waypoints to generate
+static const int N_WAYPOINTS = 2; // number of random waypoints to generate //TODO: change depending on goal
 static const double DWELL_SEC = 0.30; // seconds to dwell at each waypoint
 
 
@@ -36,7 +36,7 @@ static const double VEL_MAX = 0.15;
 static const double ACC_SCALE = 0.10;
 
 static const std::string CSV_OUT =
-    std::string(std::getenv("HOME")) + "/trajectory_export.csv"; //TODO: change path
+    std::string(std::getenv("HOME")) + "/trajectory_export_test.csv"; //TODO: change path
 
 // Convert builtin Duration + rclcpp::Duration -> builtin Duration
 inline builtin_interfaces::msg::Duration add_duration(
@@ -196,7 +196,7 @@ int main(int argc, char **argv) {
     move_group.setMaxVelocityScalingFactor(vel_scale);
     RCLCPP_INFO(logger, "Segment %zu: velocity scaling = %.3f", i, vel_scale);
 
-    move_group.setStartState(last_state);
+    move_group.setStartStateToCurrentState();
 
     const std::size_t MAX_IK_RETRIES = 25;
 
@@ -247,6 +247,20 @@ int main(int argc, char **argv) {
     // Add a dwell
     append_dwell(plan.trajectory_, DWELL_SEC);
 
+    // Visualize
+    moveit_msgs::msg::DisplayTrajectory disp_msg;
+    disp_msg.model_id = move_group.getRobotModel()->getName();
+    moveit::core::robotStateToRobotStateMsg(last_state, disp_msg.trajectory_start);
+    disp_msg.trajectory.push_back(plan.trajectory_);
+    disp_pub->publish(disp_msg);
+
+    // Execute each segment
+    const bool exec_ok = (move_group.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+    if (!exec_ok)
+      RCLCPP_ERROR(logger, "Segment %zu: execution failed!", i);
+    else
+      RCLCPP_INFO(logger, "Segment %zu: execution succeeded.", i);
+
     const auto &pts_after = plan.trajectory_.joint_trajectory.points;
     if (!pts_after.empty()) {
       const auto &q_end = pts_after.back().positions;
@@ -261,31 +275,31 @@ int main(int argc, char **argv) {
     move_group.clearPoseTargets();
   }
 
-  // Execute the combined trajectory once at the end
-  if (!combined.joint_trajectory.points.empty()) {
-    RCLCPP_INFO(logger, "Executing combined trajectory with %zu points...", combined.joint_trajectory.points.size());
-
-    // Wrap combined trajectory as a MoveGroup plan
-    moveit::planning_interface::MoveGroupInterface::Plan big_plan;
-    big_plan.trajectory_ = combined;
-
-    // Visualize before execution
-    moveit_msgs::msg::DisplayTrajectory disp_msg;
-    disp_msg.model_id = move_group.getRobotModel()->getName();
-    if (auto current_ptr = move_group.getCurrentState(0.5))
-      moveit::core::robotStateToRobotStateMsg(*current_ptr, disp_msg.trajectory_start);
-    disp_msg.trajectory.push_back(combined);
-    disp_pub->publish(disp_msg);
-    RCLCPP_INFO(logger, "Published combined trajectory preview to /display_planned_path");
-
-    // Execute the entire path once
-    const bool exec_ok = (move_group.execute(big_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-
-    if (exec_ok)
-      RCLCPP_INFO(logger, "Execution complete!");
-    else
-      RCLCPP_ERROR(logger, "Execution failed!");
-  }
+  //// Execute the combined trajectory once at the end
+  //if (!combined.joint_trajectory.points.empty()) {
+  //  RCLCPP_INFO(logger, "Executing combined trajectory with %zu points...", combined.joint_trajectory.points.size());
+//
+  //  // Wrap combined trajectory as a MoveGroup plan
+  //  moveit::planning_interface::MoveGroupInterface::Plan big_plan;
+  //  big_plan.trajectory_ = combined;
+//
+  //  // Visualize before execution
+  //  moveit_msgs::msg::DisplayTrajectory disp_msg;
+  //  disp_msg.model_id = move_group.getRobotModel()->getName();
+  //  if (auto current_ptr = move_group.getCurrentState(0.5))
+  //    moveit::core::robotStateToRobotStateMsg(*current_ptr, disp_msg.trajectory_start);
+  //  disp_msg.trajectory.push_back(combined);
+  //  disp_pub->publish(disp_msg);
+  //  RCLCPP_INFO(logger, "Published combined trajectory preview to /display_planned_path");
+//
+  //  // Execute the entire path once
+  //  const bool exec_ok = (move_group.execute(big_plan) == moveit::core::MoveItErrorCode::SUCCESS);
+//
+  //  if (exec_ok)
+  //    RCLCPP_INFO(logger, "Execution complete!");
+  //  else
+  //    RCLCPP_ERROR(logger, "Execution failed!");
+  //}
 
 
   if (combined.joint_trajectory.points.empty()) {
