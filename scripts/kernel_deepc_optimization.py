@@ -74,6 +74,8 @@ class KernelDeePCOptimization:
         self.q_param = cp.Parameter(self.m * self.N)
         self.u_ref = cp.Parameter(self.m * self.N)
 
+        # TODO: Add reference to output? Maybe regulating  it to 0 causes high u?
+
         # split X into the two parts used by eq. (36)
         d_ini = self.m*self.T_ini + self.p*self.T_ini
         self.X1 = self.X[:d_ini, :] # columns x1_i
@@ -250,7 +252,7 @@ class OptimizationNode(LifecycleNode):
             self._topic_init = topic_init
             self._publish_topic_u = publish_topic_u
 
-            # Cost matrices
+            # Cost matrices TODO: tune
             R = np.eye(m * N) * 1e-1
             Q = np.eye(p * N) * 1e2
 
