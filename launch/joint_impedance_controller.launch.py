@@ -30,12 +30,6 @@ def generate_launch_description():
         description='Load Franka gripper.'
     )
 
-    # Optional: pass a param file to your controller
-    # controller_param_file_arg = DeclareLaunchArgument(
-    #     'controller_param_file', default_value='',
-    #     description='Optional YAML with parameters for joint_impedance_controller.'
-    # )
-
     robot_ip = LaunchConfiguration('robot_ip')
     arm_id = LaunchConfiguration('arm_id')
     load_gripper = LaunchConfiguration('load_gripper')
@@ -66,31 +60,16 @@ def generate_launch_description():
         'joint_impedance_controller',
         '--controller-type', 'nonlinear_deepc_controller/JointImpedanceController',
     ]
-    # If a param file was provided, pass it to spawner
-    # (Leave empty to use built-in defaults: ~/trajectory_export.csv and ~/tau_log.csv)
-    # from launch.conditions import IfCondition
-    # from launch.substitutions import NotEqualsSubstitution, TextSubstitution
-    # spawner_with_params = Node(
-    #     package='controller_manager',
-    #     executable='spawner',
-    #     arguments=spawner_args + ['--param-file', controller_param_file],
-    #     condition=IfCondition(NotEqualsSubstitution(left=controller_param_file, right=TextSubstitution(text=""))),
-    #     output='screen',
-    # )
 
     spawner_no_params = Node(
         package='controller_manager',
         executable='spawner',
         arguments=spawner_args,
-        # condition=IfCondition(NotEqualsSubstitution(left=controller_param_file, right=TextSubstitution(text="FOOBAR"))),
-        # the above odd condition creates a mutually exclusive pair with the first node
         output='screen',
     )
 
     return LaunchDescription([
         robot_ip_arg, arm_id_arg, use_rviz_arg, use_fake_hw_arg, fake_sensor_cmds_arg, load_gripper_arg,
-        #controller_param_file_arg,
         franka_bringup_launch,
-        #spawner_with_params,
         spawner_no_params,
     ])

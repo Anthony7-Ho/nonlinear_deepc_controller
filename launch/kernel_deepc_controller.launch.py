@@ -76,7 +76,7 @@ def generate_launch_description():
         transition_id=Transition.TRANSITION_CONFIGURE
     ))
 
-    # Prepare an ACTIVATE event (we'll trigger this only after it reaches 'inactive')
+    # Prepare an ACTIVATE event
     request_activate = EmitEvent(event = ChangeState(
         lifecycle_node_matcher=matches_action(optimizer),
         transition_id=Transition.TRANSITION_ACTIVATE

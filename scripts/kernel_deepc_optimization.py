@@ -119,6 +119,15 @@ class KernelDeePCOptimization:
         u_min = -u_max
         self.constraints += [ self.u >= u_min, self.u <= u_max]
 
+        # Trust region on input # TODO: tune or make delta adaptive? (30% of u_ref))
+        self.delta = 0.3
+        for j in range(self.m):
+            sl = slice(j, self.m*self.N, self.m)
+            self.constraints += [
+                self.u[sl] <= self.u_ref[sl] + self.delta,
+                self.u[sl] >= self.u_ref[sl] - self.delta,
+            ]
+
         # objective
         obj = 0.5 * cp.quad_form(self.u - self.u_ref, self.P) + self.q_param @ self.u
 
@@ -157,7 +166,7 @@ class KernelDeePCOptimization:
         Args:
             u_ini: array of shape (m*T_ini,)
             y_ini: array of shape (p*T_ini,)
-            u_ref: optional reference input trajectory of shape (m*N,)
+            u_ref: reference input trajectory of shape (m*N,)
 
         Returns:
             dict with keys like {"u_opt": ..., "g_opt": ..., "status": ...}
@@ -253,8 +262,8 @@ class OptimizationNode(LifecycleNode):
             self._publish_topic_u = publish_topic_u
 
             # Cost matrices TODO: tune
-            R = np.eye(m * N) * 1e-1
-            Q = np.eye(p * N) * 1e2
+            R = np.eye(m * N) * 1e1
+            Q = np.eye(p * N) * 1e1
 
             # Load data from share
             share_dir = get_package_share_directory("nonlinear_deepc_controller")
@@ -266,8 +275,9 @@ class OptimizationNode(LifecycleNode):
             gamma = float(data["gamma"])
             rbf_scale = float(data["rbf_scale"])
 
-            lambda_g = 1e7
-            lambda_k = 1e3
+            # TODO: tune
+            lambda_g = 1e5
+            lambda_k = 1e1
 
             cfg = dict(
                 m=m, p=p, T_ini=T_ini, N=N,
@@ -330,7 +340,7 @@ class OptimizationNode(LifecycleNode):
 
     def on_cleanup(self, state) -> TCR:
         """
-        Free heavy resources; node goes back to UNCONFIGURED.
+        Node goes back to UNCONFIGURED.
         """
         try:
             self.optimizer = None

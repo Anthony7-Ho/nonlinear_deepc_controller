@@ -51,7 +51,7 @@ CallbackReturn KernelDeePCController::on_init() {
 
     // Decay parameters
     auto_declare<double>("alpha_max", 1.0);
-    auto_declare<double>("alpha_decay_seconds", 0.05);
+    auto_declare<double>("alpha_decay_seconds", 0.01); // TODO: tune, decrease --> faster decay of alpha
 
     // Logging params
     auto_declare<int>("log_decimation", 1);
@@ -76,7 +76,7 @@ CallbackReturn KernelDeePCController::on_configure(const rclcpp_lifecycle::State
 
   alpha_max_ = get_node()->get_parameter("alpha_max").as_double();
   alpha_decay_seconds_ = get_node()->get_parameter("alpha_decay_seconds").as_double();
-  if (alpha_decay_seconds_ <= 1e-6) alpha_decay_seconds_ = 1e-3;
+  // if (alpha_decay_seconds_ <= 1e-6) alpha_decay_seconds_ = 1e-3;
 
   auto k_gains = get_node()->get_parameter("k_gains").as_double_array();
   auto d_gains = get_node()->get_parameter("d_gains").as_double_array();
