@@ -203,7 +203,6 @@ KernelDeePCController::interp(const std::vector<Vector7d>& data, double t) const
 
 controller_interface::return_type
 KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {
-  elapsed_time_ += period.seconds();
   updateJointStates();
 
   // Latest external torque
@@ -225,6 +224,7 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
           // publish once, then wait for u_opt (still zero torque)
           publishInit("warmup_done");
           phase_ = Phase::WAIT_FOR_UOPT;
+          elapsed_time_ = 0.0;
           RCLCPP_INFO(get_node()->get_logger(), "Warmup complete. Waiting for u_opt...");
         }
       }
@@ -237,6 +237,7 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
       if (have_u_opt_.load(std::memory_order_acquire)) {
         phase_ = Phase::TRACKING;
         time_since_uopt_ = 0.0;
+        elapsed_time_ = 0.0;
         RCLCPP_INFO(get_node()->get_logger(), "Received first u_opt. Entering TRACKING.");
       }
       break;
@@ -244,6 +245,7 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
 
     case Phase::TRACKING: {
       // blend impedance with u_opt
+      elapsed_time_ += period.seconds();
       Vector7d q_des = interp(q_traj_, elapsed_time_);
       Vector7d dq_des = dq_traj_.empty() ? Vector7d::Zero() : interp(dq_traj_, elapsed_time_);
       Vector7d tau_imp = k_gains_.cwiseProduct(q_des - q_) + d_gains_.cwiseProduct(dq_des - dq_filtered_);

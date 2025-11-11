@@ -120,7 +120,7 @@ class KernelDeePCOptimization:
         self.constraints += [ self.u >= u_min, self.u <= u_max]
 
         # Trust region on input # TODO: tune or make delta adaptive? (30% of u_ref))
-        self.delta = 0.3
+        self.delta = 0.5
         for j in range(self.m):
             sl = slice(j, self.m*self.N, self.m)
             self.constraints += [
@@ -277,7 +277,7 @@ class OptimizationNode(LifecycleNode):
 
             # TODO: tune
             lambda_g = 1e5
-            lambda_k = 1e1
+            lambda_k = 1e2
 
             cfg = dict(
                 m=m, p=p, T_ini=T_ini, N=N,
@@ -381,6 +381,11 @@ class OptimizationNode(LifecycleNode):
 
         if u_ref.size == m:
             u_ref = np.tile(u_ref, self.optimizer.N)
+
+        u_max_per_joint = np.array([1, 1, 1, 1, 1, 1, 1], dtype=float)
+        u_max = np.tile(u_max_per_joint, self.optimizer.N)
+        u_min = -u_max
+        u_ref = np.clip(u_ref, u_min + 1e-6, u_max - 1e-6)
 
         result = self.optimizer.update(u_ini=u_ini, y_ini=y_ini, u_ref=u_ref)
         if result is None:

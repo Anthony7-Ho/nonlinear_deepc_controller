@@ -40,7 +40,7 @@ CallbackReturn JointImpedanceController::on_init() {
     auto_declare<std::vector<double>>("d_gains", {2,2,2,1,1,1,0.5});
     auto_declare<std::string>("csv_path", std::string(std::getenv("HOME")) + "/trajectory_export_test.csv"); //TODO: change path
     auto_declare<std::string>("log_path",
-      std::string(std::getenv("HOME")) + "/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_log_test.csv"); //TODO: change path
+      std::string(std::getenv("HOME")) + "/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_ext_test.csv"); //TODO: change path
     auto_declare<std::string>("robot_state_topic", "/franka_robot_state_broadcaster/robot_state");
     auto_declare<int>("log_decimation", 1);
     auto_declare<bool>("stop_logging_at_end", true);
