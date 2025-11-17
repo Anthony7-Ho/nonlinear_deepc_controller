@@ -19,8 +19,8 @@ namespace nonlinear_deepc_controller {
 /**
  * KernelDeePC-aware joint controller with warmup:
  *  - Warmup: apply zero torque and fill u_ini (zeros) + y_ini (measured tau_ext) for T_ini samples.
- *  - Publish [u_ini; y_ini], then wait for u_opt.
- *  - On u_opt: blend impedance with u_opt; maintain rolling histories and publish new [u_ini; y_ini] on each new u_opt.
+ *  - Publish [u_ini; y_ini], then wait for friction_prediction.
+ *  - On friction_prediction: blend impedance with friction_prediction; maintain rolling histories and publish new [u_ini; y_ini] on each new friction_prediction.
  *  - Log tau_ext to CSV.
  */
 class KernelDeePCController final : public controller_interface::ControllerInterface {
@@ -44,20 +44,20 @@ class KernelDeePCController final : public controller_interface::ControllerInter
   std::string log_path_;
   std::string robot_state_topic_;
   std::string deepc_init_topic_; // publishes [u_ini; y_ini]
-  std::string deepc_uopt_topic_; // subscribes to u_opt
+  std::string deepc_friction_prediction_topic_; // subscribes to friction_prediction
   int T_ini_{40}; // length of past horizon
   Vector7d k_gains_{Vector7d::Zero()};
   Vector7d d_gains_{Vector7d::Zero()};
 
   // decay parameters
-  double alpha_max_{1.0}; // initial alpha when fresh u_opt arrives
+  double alpha_max_{1.0}; // initial alpha when fresh friction_prediction arrives
   double alpha_decay_seconds_{0.05};  // decay time constant
 
   // Constants
   const int num_joints = 7;
 
   // States
-  enum class Phase { WARMUP, WAIT_FOR_UOPT, TRACKING };
+  enum class Phase { WARMUP, WAIT_FOR_FRICTION_PREDICTION, TRACKING };
   Phase phase_{Phase::WARMUP};
 
   Vector7d q_{Vector7d::Zero()};
@@ -79,10 +79,10 @@ class KernelDeePCController final : public controller_interface::ControllerInter
 
   // DeePC IO
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr init_pub_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr uopt_sub_;
-  std::atomic<bool> have_u_opt_{false};
-  Vector7d latest_u_opt_{Vector7d::Zero()};
-  double time_since_uopt_{1e9};   // seconds since last u_opt (large at start)
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr friction_prediction_sub_;
+  std::atomic<bool> have_friction_prediction_{false};
+  Vector7d latest_friction_prediction_{Vector7d::Zero()};
+  double time_since_friction_prediction_{1e9};   // seconds since last friction_prediction (large at start)
 
   // RobotState subscriber
   rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr state_sub_;
@@ -111,7 +111,7 @@ class KernelDeePCController final : public controller_interface::ControllerInter
                      const Vector7d& y_curr);
   void publishInit(const char* reason); // publish [u_ini; y_ini; u_ref]
 
-  void uoptCallback(const std_msgs::msg::Float64MultiArray& msg);
+  void friction_predictionCallback(const std_msgs::msg::Float64MultiArray& msg);
 };
 
 }  // namespace nonlinear_deepc_controller

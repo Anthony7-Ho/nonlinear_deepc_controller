@@ -51,16 +51,16 @@ class KernelDeePCOptimization:
         self.N = self.cfg["N"]
 
         # Extract cost matrices
-        self.R = sparse.csr_matrix(self.cfg["R"])
-        self.Q = sparse.csr_matrix(self.cfg["Q"])
+        self.R = self.cfg["R"]
+        self.Q = self.cfg["Q"]
 
         # Extract Kernel and Hankel matrices
         self.K = self.cfg["K"]
         self.Hc = self.K.shape[0]
         self.gamma = self.cfg["gamma"]
-        self.Kg = sparse.csr_matrix(self.K + self.gamma*np.eye(self.Hc))
+        self.Kg = self.K + self.gamma*np.eye(self.Hc)
         self.X = self.cfg["X"]
-        self.Hy_future = sparse.csr_matrix(self.cfg["Hy_future"])
+        self.Hy_future = self.cfg["Hy_future"]
         self.rbf_scale = self.cfg["rbf_scale"]
 
         # Regularization weights
@@ -68,86 +68,59 @@ class KernelDeePCOptimization:
         self.lambda_k = self.cfg["lambda_k"]
 
         # Decision variables
-        self.u = cp.Variable(self.m * self.N)
+        # self.u = cp.Variable(self.m * self.N)
+        self.g = cp.Variable(self.Hc)  # size Hc
 
         # Parameters that change online:
-        self.q_param = cp.Parameter(self.m * self.N)
-        self.u_ref = cp.Parameter(self.m * self.N)
+
+        # Prediction contraints TODO: does it make sense for safety? Without we can used closed form solution
+        self.constraints = []
+        # self.constraints += [self.u == self.u_ref]
+        self.constraints += [self.Hy_future @ self.g >= -0.3, self.Hy_future @ self.g <= 0.3]  # friction limits (for safety)
 
         # TODO: Add reference to output? Maybe regulating  it to 0 causes high u?
-
+        """
+        For mixed kernel
         # split X into the two parts used by eq. (36)
         d_ini = self.m*self.T_ini + self.p*self.T_ini
         self.X1 = self.X[:d_ini, :] # columns x1_i
-        self.X2 = sparse.csr_matrix(self.X[d_ini:, :]) # columns x2_i
+        self.X2 = self.X[d_ini:, :] # columns x2_i
         self.X1_col_norm2 = np.sum(self.X1**2, axis=0) # precompute squared norms of columns of X1
+        """
+        self.X_col_norm2 = np.sum(self.X**2, axis=0) # precompute squared norms of columns of X
 
-        # -------- Matrices for QP without g --------
-        # A = Hy_future^T Q Hy_future + lambda_g I + lambda_k Kg^T Kg
-        A_dense = (self.Hy_future.T @ self.Q @ self.Hy_future + self.lambda_g * sparse.eye(self.Hc) +self.lambda_k * self.Kg.T @ self.Kg).toarray()
-        self.cf = cho_factor(A_dense, lower=True, check_finite=False)
-        
-        E = self.lambda_k * self.Kg.T
-        # Build M = lambda_k I - E^T A^{-1} E
-        E_dense = E.toarray() # (Hc x Hc)
-        AinvE = cho_solve(self.cf, E_dense, check_finite=False)  # solves A X = E  -> X = A^{-1}E
-        M_dense = self.lambda_k * np.eye(self.Hc) - (E_dense.T @ AinvE)
+        # build k(u_ini, y_ini, u) for the mixed kernel
+        self.k_rbf = cp.Parameter(self.Hc) # the RBF part
+        # self.k_vec = self.k_rbf + (self.X2.T @ self.u_ref) # affine part (if u == u_ref)
+        # self.k_vec = self.k_rbf + (self.X2.T @ self.u)
+        self.k_vec = self.k_rbf
 
-        M_min_eig = np.linalg.eigvalsh(M_dense).min()
-        # self.logger.info(f"[DeePCOptimization] eigmin(M) = {M_min_eig:.3e}")
+        Kernel_cost = self.Kg @ self.g - self.k_vec
 
-        # P = R + X2 M X2^T Hessian
-        XM = (self.X2 @ M_dense)  # (mN x Hc)
-        P_dense = self.R.toarray() + XM @ self.X2.T.toarray()  # (mN x mN)
-        P_dense = (P_dense + P_dense.T) / 2.0  # ensure symmetry
-
-        w = np.linalg.eigvalsh(P_dense)
-        lam_min = w.min()
-        # self.logger.info(f"[DeePCOptimization] eigmin(P) before bump = {lam_min:.3e}")
-
-        self.P = sparse.csc_matrix(P_dense)
-        self.M_dense = M_dense
-
-        self.E = E.tocsc()
-        self.X2 = self.X2.tocsc()
-        #---------------------------
-
-        # Input constraints
-        self.constraints = []
-        u_max_per_joint = np.array([1, 1, 1, 1, 1, 1, 1], dtype=float) # TODO: tune?
-        u_max = np.tile(u_max_per_joint, self.N)
-        u_min = -u_max
-        self.constraints += [ self.u >= u_min, self.u <= u_max]
-
-        # Trust region on input # TODO: tune or make delta adaptive? (30% of u_ref))
-        self.delta = 0.5
-        for j in range(self.m):
-            sl = slice(j, self.m*self.N, self.m)
-            self.constraints += [
-                self.u[sl] <= self.u_ref[sl] + self.delta,
-                self.u[sl] >= self.u_ref[sl] - self.delta,
-            ]
-
-        # objective
-        obj = 0.5 * cp.quad_form(self.u - self.u_ref, self.P) + self.q_param @ self.u
+        cost = (
+            # cp.quad_form(self.Hy_future @ self.g, self.Q) + TODO: is this needed? Do we introduce Bias by regulating the friction to 0?
+            self.lambda_g * cp.sum_squares(self.g) +
+            self.lambda_k * cp.sum_squares(Kernel_cost)
+        )
 
         # Build problem
-        self.problem = cp.Problem(cp.Minimize(obj), self.constraints)
-
-        # Shapes sanity
-        # self.logger.info(f"shapes: X1={self.X1.shape}, X2={self.X2.shape}, HyF={self.Hy_future.shape}, Kg={self.Kg.shape}")
-
-        # Conditioning of A
-        condA = np.linalg.cond(A_dense)
-        # self.logger.info(f"[DeePCOptimization] cond(A) = {condA:.3e}")
+        self.problem = cp.Problem(cp.Minimize(cost), self.constraints)
 
 
-    def build_k_rbf(self, u_ini: np.ndarray, y_ini: np.ndarray) -> np.ndarray:
+    def build_k_rbf_mixed(self, u_ini: np.ndarray, y_ini: np.ndarray) -> np.ndarray:
         """DPP-safe RBF term: exp(-rbf_scale * ||x1 - [u_ini;y_ini]||^2) for all columns."""
         xy_ini = np.hstack([u_ini, y_ini]) # (d_ini,)
         term_xy = float(xy_ini @ xy_ini) # scalar
         term_ax = self.X1.T @ xy_ini # (Hc,)
         d2 = self.X1_col_norm2 + term_xy - 2.0*term_ax # (Hc,)
+        return np.exp(-self.rbf_scale * d2).reshape(-1) # (Hc,)
+    
+    def build_k_rbf_full(self, u_ini: np.ndarray, y_ini: np.ndarray, u_ref: np.ndarray) -> np.ndarray:
+        """DPP-safe RBF term: exp(-rbf_scale * ||x - [u_ini;y_ini]||^2) for all columns."""
+        xy_ini = np.hstack([u_ini, y_ini, u_ref]) # (d_ini,)
+        term_xy = float(xy_ini @ xy_ini) # scalar
+        term_ax = self.X.T @ xy_ini # (Hc,)
+        d2 = self.X_col_norm2 + term_xy - 2.0*term_ax # (Hc,)
         return np.exp(-self.rbf_scale * d2).reshape(-1) # (Hc,)
     
     def A_solve(self, B):
@@ -173,16 +146,13 @@ class KernelDeePCOptimization:
             or None if the problem failed.
         """
 
-        k_rbf = self.build_k_rbf(u_ini=u_ini, y_ini=y_ini) # (Hc,)
+        # compute RBF term DPP-safe TODO: change full or mixed kernel
+        self.k_rbf.value = self.build_k_rbf_full(u_ini, y_ini, u_ref if u_ref is not None else np.zeros(self.m*self.N))
 
-        # q = X2 @ (M @ k_rbf)
-        q = self.X2 @ (self.M_dense @ k_rbf) # (mN,)
-        self.q_param.value = np.asarray(q).reshape(-1)
-
-        if u_ref is None:
-            self.u_ref.value = np.zeros(self.m * self.N)
-        else:
-            self.u_ref.value = u_ref.reshape(-1)
+        # if u_ref is None:
+        #     self.u_ref.value = np.zeros(self.m * self.N)
+        # else:
+        #     self.u_ref.value = u_ref.reshape(-1)
 
         start_time = time.perf_counter()
 
@@ -203,11 +173,11 @@ class KernelDeePCOptimization:
 
         out = {
             "status": status,
-            "u_opt": np.array(self.u.value).reshape(-1),
+            "friction_prediction": np.array(self.Hy_future @ self.g.value).reshape(-1),
         }
 
-        u_opt = np.array(self.u.value).reshape(-1)
-        self.logger.info(f"[DeePCOptimization] u_opt = {np.round(u_opt, 6)}")
+        friction_prediction = np.array(self.Hy_future @ self.g.value).reshape(-1)
+        self.logger.info(f"[DeePCOptimization] friction_prediction = {np.round(friction_prediction, 6)}")
 
         # if self.g is not None and self.g.value is not None:
         #     out["g_opt"] = np.array(self.g.value).reshape(-1)
@@ -232,7 +202,7 @@ class OptimizationNode(LifecycleNode):
         self.declare_parameter("T_ini", 40) # past horizon
         self.declare_parameter("N", 8) # prediction horizon
         self.declare_parameter("topic_init", "/deepc/init")  # combined message [u_ini ; y_ini; u_ref]
-        self.declare_parameter("publish_topic_u", "/deepc/u_opt")
+        self.declare_parameter("publish_topic_u", "/deepc/friction_prediction")  # publish friction compensation
 
         # Placeholders created in states
         self.optimizer: Optional[KernelDeePCOptimization] = None
@@ -276,8 +246,8 @@ class OptimizationNode(LifecycleNode):
             rbf_scale = float(data["rbf_scale"])
 
             # TODO: tune
-            lambda_g = 1e5
-            lambda_k = 1e2
+            lambda_g = 1e2
+            lambda_k = 1e8
 
             cfg = dict(
                 m=m, p=p, T_ini=T_ini, N=N,
@@ -400,7 +370,6 @@ class OptimizationNode(LifecycleNode):
         self.get_logger().info(
             f"Optimization status: {result['status']}. Published u0 with shape {u0.shape}."
         )
-
 
 def main():
     rclpy.init()

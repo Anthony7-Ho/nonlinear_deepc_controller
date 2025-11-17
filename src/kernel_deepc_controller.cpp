@@ -46,7 +46,7 @@ CallbackReturn KernelDeePCController::on_init() {
 
     // DeePC topics + window
     auto_declare<std::string>("deepc_init_topic", "/deepc/init"); // pub [u_ini; y_ini]
-    auto_declare<std::string>("deepc_uopt_topic", "/deepc/u_opt"); // sub u_opt
+    auto_declare<std::string>("deepc_friction_prediction_topic", "/deepc/friction_prediction"); // sub friction_prediction
     auto_declare<int>("T_ini", 40);
 
     // Decay parameters
@@ -71,7 +71,7 @@ CallbackReturn KernelDeePCController::on_configure(const rclcpp_lifecycle::State
   robot_state_topic_ = get_node()->get_parameter("robot_state_topic").as_string();
 
   deepc_init_topic_ = get_node()->get_parameter("deepc_init_topic").as_string();
-  deepc_uopt_topic_ = get_node()->get_parameter("deepc_uopt_topic").as_string();
+  deepc_friction_prediction_topic_ = get_node()->get_parameter("deepc_friction_prediction_topic").as_string();
   T_ini_ = get_node()->get_parameter("T_ini").as_int();
 
   alpha_max_ = get_node()->get_parameter("alpha_max").as_double();
@@ -113,9 +113,9 @@ CallbackReturn KernelDeePCController::on_configure(const rclcpp_lifecycle::State
   init_pub_ = get_node()->create_publisher<std_msgs::msg::Float64MultiArray>(
       deepc_init_topic_, rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
 
-  uopt_sub_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
-      deepc_uopt_topic_, rclcpp::QoS(rclcpp::KeepLast(10)).reliable(),
-      std::bind(&KernelDeePCController::uoptCallback, this, std::placeholders::_1));
+  friction_prediction_sub_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+      deepc_friction_prediction_topic_, rclcpp::QoS(rclcpp::KeepLast(10)).reliable(),
+      std::bind(&KernelDeePCController::friction_predictionCallback, this, std::placeholders::_1));
 
   // Logging params
   log_decimation_ = get_node()->get_parameter("log_decimation").as_int();
@@ -134,9 +134,9 @@ CallbackReturn KernelDeePCController::on_configure(const rclcpp_lifecycle::State
   // Histories + phase
   resetHistories();
   phase_ = Phase::WARMUP;
-  have_u_opt_.store(false, std::memory_order_release);
-  time_since_uopt_ = 1e9;
-  latest_u_opt_.setZero();
+  have_friction_prediction_.store(false, std::memory_order_release);
+  time_since_friction_prediction_ = 1e9;
+  latest_friction_prediction_.setZero();
 
   return CallbackReturn::SUCCESS;
 }
@@ -155,9 +155,9 @@ CallbackReturn KernelDeePCController::on_activate(const rclcpp_lifecycle::State&
   // start again in warmup
   resetHistories();
   phase_ = Phase::WARMUP;
-  have_u_opt_.store(false, std::memory_order_release);
-  time_since_uopt_ = 1e9;
-  latest_u_opt_.setZero();
+  have_friction_prediction_.store(false, std::memory_order_release);
+  time_since_friction_prediction_ = 1e9;
+  latest_friction_prediction_.setZero();
 
   RCLCPP_INFO(get_node()->get_logger(), "KernelDeePCController activated. Warmup started.");
   return CallbackReturn::SUCCESS;
@@ -221,42 +221,42 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
       if (have_tau_ext_.load(std::memory_order_acquire)) {
         bool full = warmupStep(tau_ext);
         if (full) {
-          // publish once, then wait for u_opt (still zero torque)
+          // publish once, then wait for friction_prediction (still zero torque)
           publishInit("warmup_done");
-          phase_ = Phase::WAIT_FOR_UOPT;
+          phase_ = Phase::WAIT_FOR_FRICTION_PREDICTION;
           elapsed_time_ = 0.0;
-          RCLCPP_INFO(get_node()->get_logger(), "Warmup complete. Waiting for u_opt...");
+          RCLCPP_INFO(get_node()->get_logger(), "Warmup complete. Waiting for friction_prediction...");
         }
       }
       break;
     }
 
-    case Phase::WAIT_FOR_UOPT: {
+    case Phase::WAIT_FOR_FRICTION_PREDICTION: {
       // keep sending zero torques; histories are not updated here
       // (we freeze the window that we sent to the optimizer)
-      if (have_u_opt_.load(std::memory_order_acquire)) {
+      if (have_friction_prediction_.load(std::memory_order_acquire)) {
         phase_ = Phase::TRACKING;
-        time_since_uopt_ = 0.0;
+        time_since_friction_prediction_ = 0.0;
         elapsed_time_ = 0.0;
-        RCLCPP_INFO(get_node()->get_logger(), "Received first u_opt. Entering TRACKING.");
+        RCLCPP_INFO(get_node()->get_logger(), "Received first friction_prediction. Entering TRACKING.");
       }
       break;
     }
 
     case Phase::TRACKING: {
-      // blend impedance with u_opt
+      // blend impedance with friction_prediction
       elapsed_time_ += period.seconds();
       Vector7d q_des = interp(q_traj_, elapsed_time_);
       Vector7d dq_des = dq_traj_.empty() ? Vector7d::Zero() : interp(dq_traj_, elapsed_time_);
       Vector7d tau_imp = k_gains_.cwiseProduct(q_des - q_) + d_gains_.cwiseProduct(dq_des - dq_filtered_);
       last_tau_imp_ = tau_imp;
 
-      time_since_uopt_ += period.seconds();
-      double alpha = alpha_max_ * std::exp(-time_since_uopt_ / alpha_decay_seconds_);
+      time_since_friction_prediction_ += period.seconds();
+      double alpha = alpha_max_ * std::exp(-time_since_friction_prediction_ / alpha_decay_seconds_);
       if (alpha < 0.0) alpha = 0.0;
       if (alpha > alpha_max_) alpha = alpha_max_;
 
-      tau_cmd = (1 - alpha) * tau_imp + alpha * latest_u_opt_;
+      tau_cmd = tau_imp + alpha * latest_friction_prediction_;
 
       // update histories with one-step delay
       pushHistories(prev_tau_applied_, tau_ext);
@@ -438,31 +438,31 @@ void KernelDeePCController::publishInit(const char* reason) {
   RCLCPP_INFO(get_node()->get_logger(), "Published [u_ini; y_ini; u_ref] (%s).", reason);
 }
 
-void KernelDeePCController::uoptCallback(const std_msgs::msg::Float64MultiArray& msg) {
+void KernelDeePCController::friction_predictionCallback(const std_msgs::msg::Float64MultiArray& msg) {
   if (msg.data.size() < static_cast<size_t>(num_joints)) {
-    RCLCPP_WARN(get_node()->get_logger(), "u_opt too small: got %zu, need at least %d",
+    RCLCPP_WARN(get_node()->get_logger(), "friction_prediction too small: got %zu, need at least %d",
                 msg.data.size(), num_joints);
     return;
   }
   for (int i = 0; i < num_joints; ++i) {
-    latest_u_opt_(i) = msg.data[i];
+    latest_friction_prediction_(i) = msg.data[i];
   }
-  have_u_opt_.store(true, std::memory_order_release);
-  time_since_uopt_ = 0.0;
+  have_friction_prediction_.store(true, std::memory_order_release);
+  time_since_friction_prediction_ = 0.0;
 
   // If we were waiting, move to tracking
-  if (phase_ == Phase::WAIT_FOR_UOPT) {
+  if (phase_ == Phase::WAIT_FOR_FRICTION_PREDICTION) {
     phase_ = Phase::TRACKING;
     // Start a fresh log for the tracking phase
     tau_ext_hist_.clear();
     t_hist_.clear();
     log_counter_ = 0;
-    RCLCPP_INFO(get_node()->get_logger(), "u_opt received. Transition to TRACKING.");
+    RCLCPP_INFO(get_node()->get_logger(), "friction_prediction received. Transition to TRACKING.");
   }
 
-  // On each new u_opt, publish the current [u_ini; y_ini; u_ref] for the solver
+  // On each new friction_prediction, publish the current [u_ini; y_ini; u_ref] for the solver
   if (static_cast<int>(u_hist_.size()) >= T_ini_ && static_cast<int>(y_hist_.size()) >= T_ini_) {
-    publishInit("u_opt_callback");
+    publishInit("friction_prediction_callback");
   }
 }
 
