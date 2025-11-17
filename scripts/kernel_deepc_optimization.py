@@ -142,7 +142,7 @@ class KernelDeePCOptimization:
             u_ref: reference input trajectory of shape (m*N,)
 
         Returns:
-            dict with keys like {"u_opt": ..., "g_opt": ..., "status": ...}
+            dict with keys like {"friction_prediction": ..., "status": ...}
             or None if the problem failed.
         """
 
@@ -202,12 +202,12 @@ class OptimizationNode(LifecycleNode):
         self.declare_parameter("T_ini", 40) # past horizon
         self.declare_parameter("N", 8) # prediction horizon
         self.declare_parameter("topic_init", "/deepc/init")  # combined message [u_ini ; y_ini; u_ref]
-        self.declare_parameter("publish_topic_u", "/deepc/friction_prediction")  # publish friction compensation
+        self.declare_parameter("publish_topic_y", "/deepc/friction_prediction")  # publish friction compensation
 
         # Placeholders created in states
         self.optimizer: Optional[KernelDeePCOptimization] = None
         self.sub_init = None
-        self.pub_u = None
+        self.pub_y = None
 
         self._qos = QoSProfile(depth = 10)
 
@@ -226,10 +226,10 @@ class OptimizationNode(LifecycleNode):
             N = int(self.get_parameter("N").value)
 
             topic_init = self.get_parameter("topic_init").value
-            publish_topic_u = self.get_parameter("publish_topic_u").value
+            publish_topic_y = self.get_parameter("publish_topic_y").value
 
             self._topic_init = topic_init
-            self._publish_topic_u = publish_topic_u
+            self._publish_topic_y = publish_topic_y
 
             # Cost matrices TODO: tune
             R = np.eye(m * N) * 1e1
@@ -273,9 +273,9 @@ class OptimizationNode(LifecycleNode):
         Create publishers/subscribers/timers here so the node only starts I/O when ACTIVE.
         """
         try:
-            # Publisher for u_opt
-            self.pub_u = self.create_publisher(
-                Float64MultiArray, self._publish_topic_u, self._qos
+            # Publisher for friction prediction
+            self.pub_y = self.create_publisher(
+                Float64MultiArray, self._publish_topic_y, self._qos
             )
             # Subscriber for [u_ini; y_ini]
             self.sub_init = self.create_subscription(
@@ -298,9 +298,9 @@ class OptimizationNode(LifecycleNode):
             if self.sub_init is not None:
                 self.destroy_subscription(self.sub_init)
                 self.sub_init = None
-            if self.pub_u is not None:
-                self.destroy_publisher(self.pub_u)
-                self.pub_u = None
+            if self.pub_y is not None:
+                self.destroy_publisher(self.pub_y)
+                self.pub_y = None
 
             self.get_logger().info("optimization Node DEACTIVATED.")
             return TCR.SUCCESS
@@ -362,11 +362,11 @@ class OptimizationNode(LifecycleNode):
             self.get_logger().warn("Optimization failed or infeasible.")
             return
 
-        u_opt = result["u_opt"]
-        u0 = u_opt[:m]
+        friction_prediction = result["friction_prediction"]
+        u0 = friction_prediction[:m]
         out = Float64MultiArray(data=u0.tolist())
-        if self.pub_u is not None:
-            self.pub_u.publish(out)
+        if self.pub_y is not None:
+            self.pub_y.publish(out)
         self.get_logger().info(
             f"Optimization status: {result['status']}. Published u0 with shape {u0.shape}."
         )
