@@ -38,9 +38,9 @@ CallbackReturn JointImpedanceController::on_init() {
     auto_declare<std::string>("arm_id", "fr3");
     auto_declare<std::vector<double>>("k_gains", {24,24,24,24,10,6,2});
     auto_declare<std::vector<double>>("d_gains", {2,2,2,1,1,1,0.5});
-    auto_declare<std::string>("csv_path", std::string(std::getenv("HOME")) + "/trajectory_export_test.csv"); //TODO: change path
+    auto_declare<std::string>("csv_path", std::string(std::getenv("HOME")) + "/trajectory_validation.csv"); //TODO: change path that controller has to follow
     auto_declare<std::string>("log_path",
-      std::string(std::getenv("HOME")) + "/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_ext_test.csv"); //TODO: change path
+      std::string(std::getenv("HOME")) + "/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_log_validation.csv"); //TODO: change path where it has to store u and tau_ext
     auto_declare<std::string>("robot_state_topic", "/franka_robot_state_broadcaster/robot_state");
     auto_declare<int>("log_decimation", 1);
     auto_declare<bool>("stop_logging_at_end", true);
@@ -100,6 +100,24 @@ CallbackReturn JointImpedanceController::on_configure(const rclcpp_lifecycle::St
             tau_ext_last_[i] = msg.tau_ext_hat_filtered.effort[i];
           }
           have_tau_ext_.store(true, std::memory_order_release);
+          //RCLCPP_INFO(get_node()->get_logger(), "Received tau_ext update");
+        }
+        if (msg.measured_joint_state.velocity.size() >= static_cast<size_t>(num_joints)) {
+          for (int i = 0; i < num_joints; ++i) {
+            dq_state_last_[i] = msg.measured_joint_state.velocity[i];
+          }
+          have_dq_state_.store(true, std::memory_order_release);
+          //RCLCPP_INFO(get_node()->get_logger(), "Received dq_state update");
+        }
+        if (msg.measured_joint_state.position.size() >= static_cast<size_t>(num_joints)) {
+          for (int i = 0; i < num_joints; ++i) {
+            q_state_last_[i] = msg.measured_joint_state.position[i];
+          }
+          have_q_state_.store(true, std::memory_order_release);
+          //RCLCPP_INFO(get_node()->get_logger(), "Received q_state update");
+        }
+        else {
+          //RCLCPP_WARN(get_node()->get_logger(), "Received incomplete messages");
         }
       });
 
@@ -114,11 +132,15 @@ CallbackReturn JointImpedanceController::on_configure(const rclcpp_lifecycle::St
   logging_active_ = true;
   tau_cmd_hist_.clear();
   tau_ext_hist_.clear();
+  dq_state_hist_.clear();
+  q_state_hist_.clear();
   t_hist_.clear();
   // Reserve to reduce reallocs
-  tau_cmd_hist_.reserve(t_grid_.size() * 200);
-  tau_ext_hist_.reserve(t_grid_.size() * 200);
-  t_hist_.reserve(t_grid_.size() * 200);
+  tau_cmd_hist_.reserve(t_grid_.size() * 1000);
+  tau_ext_hist_.reserve(t_grid_.size() * 1000);
+  dq_state_hist_.reserve(t_grid_.size() * 1000);
+  q_state_hist_.reserve(t_grid_.size() * 1000);
+  t_hist_.reserve(t_grid_.size() * 1000);
 
   return CallbackReturn::SUCCESS;
 }
@@ -133,6 +155,8 @@ CallbackReturn JointImpedanceController::on_activate(const rclcpp_lifecycle::Sta
   log_counter_ = 0;
   tau_cmd_hist_.clear();
   tau_ext_hist_.clear();
+  dq_state_hist_.clear();
+  q_state_hist_.clear();
   t_hist_.clear();
 
   return CallbackReturn::SUCCESS;
@@ -200,16 +224,45 @@ JointImpedanceController::update(const rclcpp::Time& /*time*/, const rclcpp::Dur
     for (int i = 0; i < num_joints; ++i) tau_ext(i) = tau_ext_last_[i];
   }
 
+  // dq from robot_state (latest)
+  Vector7d dq_state = Vector7d::Zero();
+  if (have_dq_state_.load(std::memory_order_acquire)) {
+    for (int i = 0; i < num_joints; ++i) dq_state(i) = dq_state_last_[i];
+  }
+
+  // q from robot_state (latest)
+  Vector7d q_state = Vector7d::Zero();
+  if (have_q_state_.load(std::memory_order_acquire)) {
+    for (int i = 0; i < num_joints; ++i) q_state(i) = q_state_last_[i];
+  }
+
+  static bool first_debug = true;
+  if (first_debug) {
+    first_debug = false;
+    RCLCPP_INFO(
+        get_node()->get_logger(),
+        "debug: tau_ext[0]=%f dq_state[0]=%f q_state[0]=%f",
+        tau_ext(0), dq_state(0), q_state(0));
+  }
+
+
   // Per-update logging with stop-at-end guard
   const double t_end = t_grid_.back();
   if (stop_logging_at_end_ && elapsed_time_ > t_end + post_log_window_) {
     logging_active_ = false;
   }
 
-  if (logging_active_) {
+  bool have_all_state =
+    have_tau_ext_.load(std::memory_order_acquire) &&
+    have_dq_state_.load(std::memory_order_acquire) &&
+    have_q_state_.load(std::memory_order_acquire);
+
+  if (logging_active_ && have_all_state) {
     if (++log_counter_ >= log_decimation_) {
       tau_cmd_hist_.push_back(tau_cmd);
       tau_ext_hist_.push_back(tau_ext);
+      dq_state_hist_.push_back(dq_state);
+      q_state_hist_.push_back(q_state);
       t_hist_.push_back(elapsed_time_);
       log_counter_ = 0;
     }
@@ -289,7 +342,7 @@ void JointImpedanceController::writeLogCsv(const std::string& path) const {
   if (!out.is_open()) throw std::runtime_error("cannot open log file");
 
   // Use the shortest length across the three histories.
-  const size_t N = std::min({t_hist_.size(), tau_cmd_hist_.size(), tau_ext_hist_.size()});
+  const size_t N = std::min({t_hist_.size(), tau_cmd_hist_.size(), tau_ext_hist_.size(), dq_state_hist_.size(), q_state_hist_.size()});
 
   // Header: label, then all timestamps at controller-rate (prefixed with t_)
   out << "label";
@@ -316,6 +369,14 @@ void JointImpedanceController::writeLogCsv(const std::string& path) const {
   // 7 rows: external torques
   for (int j = 0; j < num_joints; ++j) {
     write_row("tau_ext_" + std::to_string(j), j, tau_ext_hist_);
+  }
+  // 7 rows: q_state rows
+  for (int j = 0; j < num_joints; ++j) {
+    write_row("q_state_" + std::to_string(j), j, q_state_hist_);
+  }
+  // 7 rows: joint velocities from robot_state
+  for (int j = 0; j < num_joints; ++j) {
+    write_row("dq_state_" + std::to_string(j), j, dq_state_hist_);
   }
 }
 

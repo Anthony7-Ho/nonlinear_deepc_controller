@@ -59,17 +59,24 @@ class JointImpedanceController final : public controller_interface::ControllerIn
   // logging (controller-rate)
   std::vector<Vector7d> tau_cmd_hist_;
   std::vector<Vector7d> tau_ext_hist_;
+  std::vector<Vector7d> dq_state_hist_;
+  std::vector<Vector7d> q_state_hist_;
   std::vector<double> t_hist_; // controller-time stamps
   int  log_decimation_{1}; // log every Nth update
   int  log_counter_{0};
   bool stop_logging_at_end_{true};
   double post_log_window_{0.0};
   bool logging_active_{true};
+  
 
   // RobotState subscriber
   rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr state_sub_;
   std::atomic<bool> have_tau_ext_{false};
   std::array<double, 7> tau_ext_last_{{0, 0, 0, 0, 0, 0, 0}};
+  std::atomic<bool> have_dq_state_{false};
+  std::array<double, 7> dq_state_last_{{0, 0, 0, 0, 0, 0, 0}};
+  std::atomic<bool> have_q_state_{false};
+  std::array<double, 7> q_state_last_{{0, 0, 0, 0, 0, 0, 0}};
 
   // Helpers
   void updateJointStates();
