@@ -2,3 +2,5 @@
 *.csv
 *.npz
 *.pdf
+*.bin
+*.json
