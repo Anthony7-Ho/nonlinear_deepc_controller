@@ -50,7 +50,7 @@ class KernelDeePCController final : public controller_interface::ControllerInter
   int T_ini_{20}; // length of past horizon (should match T_past used in data_processing)
   Vector7d k_gains_{Vector7d::Zero()};
   Vector7d d_gains_{Vector7d::Zero()};
-  double ff_gain_{1.0};
+  double ff_gain_{-1.0};
 
   // decay parameters (for blending friction compensation)
   double alpha_max_{1.0};
@@ -93,7 +93,10 @@ class KernelDeePCController final : public controller_interface::ControllerInter
   std::vector<Vector7d> tau_ext_hist_;
   std::vector<Vector7d> friction_pred_hist_;
   std::vector<Vector7d> tau_residual_hist_;
+  std::vector<Vector7d> q_des_hist_;
+  std::vector<Vector7d> q_curr_hist_;
   std::vector<double> t_hist_;
+
   int  log_decimation_{1};
   int  log_counter_{0};
   bool stop_logging_at_end_{true};

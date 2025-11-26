@@ -163,6 +163,8 @@ CallbackReturn KernelDeePCController::on_activate(
   tau_ext_hist_.clear();
   friction_pred_hist_.clear();
   tau_residual_hist_.clear();
+  q_des_hist_.clear();
+  q_curr_hist_.clear();
   t_hist_.clear();
 
   resetHistories();
@@ -219,7 +221,11 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
   // Latest external torque
   Vector7d tau_ext = Vector7d::Zero();
   // last applied torque
-  Vector7d last_tau_cmd_{Vector7d::Zero()};
+  Vector7d last_tau_cmd_ = Vector7d::Zero();
+
+  // joint states
+  Vector7d q_curr = Vector7d::Zero();
+  Vector7d q_des = Vector7d::Zero();
 
   if (have_tau_ext_.load(std::memory_order_acquire)) {
     for (int i = 0; i < num_joints; ++i) tau_ext(i) = tau_ext_last_[i];
@@ -256,9 +262,10 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
         first_update_ = false;
       }
 
-      Vector7d q_des = interp(q_traj_, elapsed_time_);
+      q_curr = q_;
+      q_des = interp(q_traj_, elapsed_time_);
       Vector7d dq_des = dq_traj_.empty() ? Vector7d::Zero(): interp(dq_traj_, elapsed_time_);
-      Vector7d tau_imp = k_gains_.cwiseProduct(q_des - q_) + d_gains_.cwiseProduct(dq_des - dq_filtered_);
+      Vector7d tau_imp = k_gains_.cwiseProduct(q_des - q_curr) + d_gains_.cwiseProduct(dq_des - dq_filtered_);
       last_tau_imp_ = tau_imp;
 
       auto t0 = std::chrono::high_resolution_clock::now();
@@ -310,6 +317,8 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
     if (++log_counter_ >= log_decimation_) {
       tau_ext_hist_.push_back(tau_ext);
       friction_pred_hist_.push_back(friction_pred);
+      q_des_hist_.push_back(q_des);
+      q_curr_hist_.push_back(q_curr);
 
       Vector7d tau_resid = tau_ext - friction_pred;
       tau_residual_hist_.push_back(tau_resid);
@@ -428,6 +437,12 @@ void KernelDeePCController::writeLogCsv(const std::string& path) const {
   }
   for (int j = 0; j < num_joints; ++j) {
     write_row("tau_residual_" + std::to_string(j), j, tau_residual_hist_);
+  }
+  for (int j = 0; j < num_joints; ++j) {
+    write_row("q_des_" + std::to_string(j), j, q_des_hist_);
+  }
+  for (int j = 0; j < num_joints; ++j) {
+    write_row("q_curr_" + std::to_string(j), j, q_curr_hist_);
   }
 }
 
