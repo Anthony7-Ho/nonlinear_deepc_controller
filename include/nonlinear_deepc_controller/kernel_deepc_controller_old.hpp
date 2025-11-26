@@ -9,17 +9,18 @@
 #include <Eigen/Eigen>
 #include <controller_interface/controller_interface.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <franka_msgs/msg/franka_robot_state.hpp>
 
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
 namespace nonlinear_deepc_controller {
+
 /**
- * Friction-aware joint controller with warmup:
+ * KernelDeePC-aware joint controller with warmup:
  *  - Warmup: apply zero torque and fill u_ini (zeros) + y_ini (measured tau_ext) for T_ini samples.
- *  - At current input, compute friction prediction using the Kernel predictor closed-form solution.
- *  - Add the predicted friction as feedforward compensation to impedance control.
- *  - Maintain rolling histories.
+ *  - Publish [u_ini; y_ini], then wait for friction_prediction.
+ *  - On friction_prediction: blend impedance with friction_prediction; maintain rolling histories and publish new [u_ini; y_ini] on each new friction_prediction.
  *  - Log tau_ext to CSV.
  */
 class KernelDeePCController final : public controller_interface::ControllerInterface {
@@ -42,28 +43,21 @@ class KernelDeePCController final : public controller_interface::ControllerInter
   std::string csv_path_;
   std::string log_path_;
   std::string robot_state_topic_;
-
-  // Kernel bundle directory
-  std::string kernel_bundle_dir_param_;
-  std::string kernel_bundle_dir_;
-
-  int T_ini_{20}; // length of past horizon (should match T_past used in data_processing)
+  std::string deepc_init_topic_; // publishes [u_ini; y_ini]
+  std::string deepc_friction_prediction_topic_; // subscribes to friction_prediction
+  int T_ini_{40}; // length of past horizon
   Vector7d k_gains_{Vector7d::Zero()};
   Vector7d d_gains_{Vector7d::Zero()};
-  double ff_gain_{1.0};
 
-  // decay parameters (for blending friction compensation)
-  double alpha_max_{1.0};
-  double alpha_decay_seconds_{0.05};
+  // decay parameters
+  double alpha_max_{1.0}; // initial alpha when fresh friction_prediction arrives
+  double alpha_decay_seconds_{0.05};  // decay time constant
 
   // Constants
   const int num_joints = 7;
-  int N_pred_{10}; // prediction horizon N (should match T_future used in data_processing)
-  bool first_update_{true};
-
 
   // States
-  enum class Phase { WARMUP, TRACKING };
+  enum class Phase { WARMUP, WAIT_FOR_FRICTION_PREDICTION, TRACKING };
   Phase phase_{Phase::WARMUP};
 
   Vector7d q_{Vector7d::Zero()};
@@ -77,12 +71,18 @@ class KernelDeePCController final : public controller_interface::ControllerInter
   std::vector<Vector7d> q_traj_;
   std::vector<Vector7d> dq_traj_;
 
-  // Histories (fixed size T_ini)
+  // DeePC history buffers (fixed size T_ini)
   std::deque<Vector7d> u_hist_; // applied torque history
   std::deque<Vector7d> y_hist_; // measured tau_ext history
   Vector7d prev_tau_applied_{Vector7d::Zero()}; // u_{k-1}
   Vector7d last_tau_imp_{Vector7d::Zero()};
-  Vector7d last_tau_cmd_{Vector7d::Zero()};
+
+  // DeePC IO
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr init_pub_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr friction_prediction_sub_;
+  std::atomic<bool> have_friction_prediction_{false};
+  Vector7d latest_friction_prediction_{Vector7d::Zero()};
+  double time_since_friction_prediction_{1e9};   // seconds since last friction_prediction (large at start)
 
   // RobotState subscriber
   rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr state_sub_;
@@ -91,41 +91,12 @@ class KernelDeePCController final : public controller_interface::ControllerInter
 
   // Logging
   std::vector<Vector7d> tau_ext_hist_;
-  std::vector<Vector7d> friction_pred_hist_;
-  std::vector<Vector7d> tau_residual_hist_;
-  std::vector<double> t_hist_;
-  int  log_decimation_{1};
+  std::vector<double> t_hist_; // controller-time stamps
+  int  log_decimation_{1}; // log every Nth update
   int  log_counter_{0};
   bool stop_logging_at_end_{true};
   double post_log_window_{0.0};
   bool logging_active_{true};
-
-  double time_since_friction_prediction_{0.0};
-
-  // Kernel DeePC closed-form model (per joint)
-  bool kernel_loaded_{false};
-
-  // Shared dimensions
-  int Hc_{100}; // dimesnion of Kg (Hc x Hc, number of cluster centers from data_processing)
-  int d_full_{50}; // length of stacked regressor [u_ini; y_ini; u_future] -Y (T_past + T_past + T_future)
-
-  // For each joint j:
-  // Kg_list_[j]: (Hc_ x Hc_) -> Kg = K + gamma_reg*I
-  // X_list_[j]: (d_full_ x Hc_) = [Hu_past; Hy_past; Hu_future]
-  // Hy_future_list_[j]: (N_pred_ x Hc_)
-  // X_col_norm2_list_[j]: precomputed ||x_i||^2 for each column of X_list_[j]
-  // A_chol_list_[j]: LLT of A_j = lambda_g I + lambda_k Kg^T Kg
-  std::array<Eigen::MatrixXd, 7> Kg_list_;
-  std::array<Eigen::MatrixXd, 7> X_list_;
-  std::array<Eigen::MatrixXd, 7> Hy_future_list_;
-
-  std::array<Eigen::VectorXd, 7> X_col_norm2_list_;
-  std::array<Eigen::LLT<Eigen::MatrixXd>, 7> A_chol_list_;
-
-  // Hyperparameters (shared across joints, loaded from meta.json
-  double rbf_scale_{0.0}; // RBF gamma (best_gamma_rbf)
-  double lambda_g_{0.0}; // regularization for g
-  double lambda_k_{0.0}; // regularization for kernel
 
   // Helpers
   void updateJointStates();
@@ -134,16 +105,13 @@ class KernelDeePCController final : public controller_interface::ControllerInter
   Vector7d interp(const std::vector<Vector7d>& data, double t) const;
 
   // warmup & histories
-  void resetHistories();
-  bool warmupStep(const Vector7d& tau_ext);
-  void pushUHistory(const Vector7d& u_curr);
-  void pushYHistory(const Vector7d& y_next);
+  void resetHistories(); // clear histories; set prev_tau_applied_ = 0
+  bool warmupStep(const Vector7d& tau_ext); // push one warmup sample; return true when full
+  void pushHistories(const Vector7d& u_prev, // push u_{k-1}, y_k during tracking
+                     const Vector7d& y_curr);
+  void publishInit(const char* reason); // publish [u_ini; y_ini; u_ref]
 
-  // Kernel bundle IO (loads all 7 joint_* folders under kernel_bundle_dir_)
-  bool loadKernelBundle(const std::string& dir);
-  bool loadBinMatrix(const std::string& path, int rows, int cols, Eigen::MatrixXd& M);
-
-  // Closed-form friction prediction
-  Vector7d computeFrictionPrediction();
+  void friction_predictionCallback(const std_msgs::msg::Float64MultiArray& msg);
 };
+
 }  // namespace nonlinear_deepc_controller

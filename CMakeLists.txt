@@ -11,7 +11,8 @@ find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(franka_semantic_components REQUIRED)
-find_package(franka_msgs REQUIRED) 
+find_package(franka_msgs REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 # Dependencies for executables
 find_package(moveit_ros_planning_interface REQUIRED)
@@ -71,6 +72,11 @@ install(FILES
   data_processing/kernel_deepc_bundle.npz
   DESTINATION share/${PROJECT_NAME}/data
 )
+install(
+  DIRECTORY data_processing/kernel_deepc_bundle/
+  DESTINATION share/${PROJECT_NAME}/data/kernel_deepc_bundle
+)
+
 
 
 install(DIRECTORY include/

@@ -37,6 +37,8 @@
   <exec_depend>python3-scipy</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ament_cmake_python</exec_depend>
+  <exec_depend>nlohmann_json</exec_depend>
+
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

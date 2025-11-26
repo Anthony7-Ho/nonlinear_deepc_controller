@@ -61,6 +61,36 @@ def generate_launch_description():
         }.items()
     )
 
+    # Optimizer LifecycleNode
+    optimizer = LifecycleNode(
+        package='nonlinear_deepc_controller',
+        executable='kernel_deepc_optimization.py',
+        name='optimization_node',
+        output='screen',
+        namespace='',
+    )
+
+    # Ask optimizer to CONFIGURE once it's started
+    request_configure = EmitEvent(event = ChangeState(
+        lifecycle_node_matcher=matches_action(optimizer),
+        transition_id=Transition.TRANSITION_CONFIGURE
+    ))
+
+    # Prepare an ACTIVATE event
+    request_activate = EmitEvent(event = ChangeState(
+        lifecycle_node_matcher=matches_action(optimizer),
+        transition_id=Transition.TRANSITION_ACTIVATE
+    ))
+
+    # When optimizer reaches 'inactive' (configured), send ACTIVATE
+    activate_when_configured = RegisterEventHandler(
+        OnStateTransition(
+            target_lifecycle_node=optimizer,
+            goal_state='inactive',
+            entities=[request_activate]
+        )
+    )
+
     # Spawn controller
     # Instance name: joint_impedance_controller
     # Type: must match plugin class name in the XML:
@@ -77,9 +107,20 @@ def generate_launch_description():
         output='screen',
     )
 
+    # Gate spawner start on optimizer reaching 'active'
+    start_spawner_when_optimizer_active = RegisterEventHandler(
+        OnStateTransition(
+            target_lifecycle_node=optimizer,
+            goal_state='active',
+            entities=[spawner]
+        )
+    )
 
     return LaunchDescription([
         robot_ip_arg, arm_id_arg, use_rviz_arg, use_fake_hw_arg, fake_sensor_cmds_arg, load_gripper_arg,
         franka_bringup_launch,
-        spawner,
+        optimizer,
+        request_configure,
+        activate_when_configured,
+        start_spawner_when_optimizer_active,
     ])
