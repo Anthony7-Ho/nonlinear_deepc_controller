@@ -344,39 +344,65 @@ void JointImpedanceController::writeLogCsv(const std::string& path) const {
   // Use the shortest length across the three histories.
   const size_t N = std::min({t_hist_.size(), tau_cmd_hist_.size(), tau_ext_hist_.size(), dq_state_hist_.size(), q_state_hist_.size()});
 
-  // Header: label, then all timestamps at controller-rate (prefixed with t_)
-  out << "label";
-  out << std::fixed << std::setprecision(6);
-  for (size_t c = 0; c < N; ++c) {
-    out << ",t_" << t_hist_[c];
+  // Header
+  out << "time_s";
+  for (int j = 0; j < num_joints; ++j) {
+    out << ",tau_cmd_" << j;
+  }
+  for (int j = 0; j < num_joints; ++j) {
+    out << ",tau_ext_" << j;
+  }
+  for (int j = 0; j < num_joints; ++j) {
+    out << ",q_state_" << j;
+  }
+  for (int j = 0; j < num_joints; ++j) {
+    out << ",dq_state_" << j;
   }
   out << "\n";
 
-  // Helper to write one joint row from a given source history
-  auto write_row = [&](const std::string& label, int joint_idx, const std::vector<Vector7d>& src) {
-    out << label;
-    out << std::setprecision(10);
-    for (size_t c = 0; c < N; ++c) {
-      out << "," << src[c](joint_idx);
-    }
-    out << "\n";
-  };
+  out << std::fixed << std::setprecision(6);
 
-  // 7 rows: commanded torques
-  for (int j = 0; j < num_joints; ++j) {
-    write_row("tau_cmd_" + std::to_string(j), j, tau_cmd_hist_);
-  }
-  // 7 rows: external torques
-  for (int j = 0; j < num_joints; ++j) {
-    write_row("tau_ext_" + std::to_string(j), j, tau_ext_hist_);
-  }
-  // 7 rows: q_state rows
-  for (int j = 0; j < num_joints; ++j) {
-    write_row("q_state_" + std::to_string(j), j, q_state_hist_);
-  }
-  // 7 rows: joint velocities from robot_state
-  for (int j = 0; j < num_joints; ++j) {
-    write_row("dq_state_" + std::to_string(j), j, dq_state_hist_);
+  for (size_t i = 0; i < N; ++i) {
+    // time column
+    out << t_hist_[i];
+
+    // tau_cmd columns
+    for (int j = 0; j < num_joints; ++j)
+      out << "," << tau_cmd_hist_[i](j);
+
+    // tau_ext columns
+    if (i < tau_ext_hist_.size()) {
+      for (int j = 0; j < num_joints; ++j) {
+        out << "," << tau_ext_hist_[i](j);
+      }
+    } else {
+      for (int j = 0; j < num_joints; ++j) {
+        out << ",0.0";
+      }
+    }
+
+    // q_state columns
+    if (i < q_state_hist_.size()) {
+      for (int j = 0; j < num_joints; ++j) {
+        out << "," << q_state_hist_[i](j);
+      }
+    } else {
+      for (int j = 0; j < num_joints; ++j) {
+        out << ",0.0";
+      }
+    }
+    // dq_state columns
+    if (i < dq_state_hist_.size()) {
+      for (int j = 0; j < num_joints; ++j) {
+        out << "," << dq_state_hist_[i](j);
+      }
+    } else {
+      for (int j = 0; j < num_joints; ++j) {
+        out << ",0.0";
+      }
+    }
+
+    out << "\n";
   }
 }
 
