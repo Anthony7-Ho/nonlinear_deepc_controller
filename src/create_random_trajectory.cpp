@@ -10,6 +10,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include <builtin_interfaces/msg/duration.hpp>
+#include <Eigen/Geometry>
 
 #include <random>
 #include <fstream>
@@ -22,7 +23,7 @@
 static const std::string GROUP_NAME = "fr3_arm";
 static const std::string EEF_LINK = "fr3_hand_tcp";
 static const std::string BASE_FRAME = "fr3_link0";
-static const int N_WAYPOINTS = 2; // number of random waypoints to generate //TODO: change depending on goal
+static const int N_WAYPOINTS = 3; // number of random waypoints to generate //TODO: change depending on goal
 static const double DWELL_SEC = 0.30; // seconds to dwell at each waypoint
 
 
@@ -35,8 +36,11 @@ static const double VEL_MIN = 0.05;
 static const double VEL_MAX = 0.15;
 static const double ACC_SCALE = 0.10;
 
-static const std::string CSV_OUT =
-    std::string(std::getenv("HOME")) + "/trajectory_test.csv"; //TODO: change path
+static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_test.csv"; //TODO: change path
+/* TODO: Only add for the test trajectory!!
+static const std::string CSV_EE_OUT = std::string(std::getenv("HOME")) + 
+        "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/cartesian_ref.csv"; // TODO: change path if you want
+*/
 
 // Convert builtin Duration + rclcpp::Duration -> builtin Duration
 inline builtin_interfaces::msg::Duration add_duration(
@@ -322,7 +326,7 @@ int main(int argc, char **argv) {
   disp_pub->publish(disp_msg);
   RCLCPP_INFO(logger, "Published combined path to /display_planned_path");
 
-  // Save to CSV
+  // Save trajectory to CSV
   try {
     const auto &jt = combined.joint_trajectory;
     const size_t nq = jt.joint_names.size();
@@ -407,6 +411,47 @@ int main(int argc, char **argv) {
     RCLCPP_ERROR(logger, "CSV post-processing failed: %s", e.what());
   }
 
+  // Save end-effector x,y,z over time to a separate CSV
+  try {
+    const auto &jt = combined.joint_trajectory;
+    const size_t nq = jt.joint_names.size();
+
+    std::ofstream ofs_ee(CSV_EE_OUT);
+    ofs_ee << std::fixed << std::setprecision(9);
+
+    // header
+    ofs_ee << "time_s,x,y,z\n";
+
+    // RobotState for FK
+    moveit::core::RobotState fk_state(robot_model);
+    fk_state.setToDefaultValues();
+
+    for (const auto &pt : jt.points) {
+      // time stamp (same as joint CSV)
+      const double t =
+          static_cast<double>(pt.time_from_start.sec) +
+          static_cast<double>(pt.time_from_start.nanosec) * 1e-9;
+
+      // skip malformed points
+      if (pt.positions.size() != nq)
+        continue;
+
+      // set joint positions and update FK
+      fk_state.setJointGroupPositions(jmg, pt.positions);
+      fk_state.update();
+
+      const Eigen::Isometry3d &T = fk_state.getGlobalLinkTransform(EEF_LINK);
+      const Eigen::Vector3d p = T.translation();  // in BASE_FRAME
+
+      ofs_ee << t << "," << p.x() << "," << p.y() << "," << p.z() << "\n";
+    }
+
+    ofs_ee.close();
+    RCLCPP_INFO(logger, "Wrote EE CSV: %s (%zu rows)",
+                CSV_EE_OUT.c_str(), jt.points.size());
+  } catch (const std::exception &e) {
+    RCLCPP_ERROR(logger, "EE CSV write failed: %s", e.what());
+  }
 
   rclcpp::shutdown();
   return 0;
