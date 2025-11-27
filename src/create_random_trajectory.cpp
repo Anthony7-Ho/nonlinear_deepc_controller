@@ -410,7 +410,7 @@ int main(int argc, char **argv) {
   } catch (const std::exception &e) {
     RCLCPP_ERROR(logger, "CSV post-processing failed: %s", e.what());
   }
-
+  /* TODO: Uncomment for logging reference end-effector positions
   // Save end-effector x,y,z over time to a separate CSV
   try {
     const auto &jt = combined.joint_trajectory;
@@ -452,6 +452,7 @@ int main(int argc, char **argv) {
   } catch (const std::exception &e) {
     RCLCPP_ERROR(logger, "EE CSV write failed: %s", e.what());
   }
+  */
 
   rclcpp::shutdown();
   return 0;
