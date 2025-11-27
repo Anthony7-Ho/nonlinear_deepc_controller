@@ -24,7 +24,8 @@ namespace nonlinear_deepc_controller {
  */
 class KernelDeePCController final : public controller_interface::ControllerInterface {
  public:
-  using Vector7d = Eigen::Matrix<double, 7, 1>;
+  using Vector7d = Eigen::Matrix<double, 7, 1>; // For per-joint vectors
+  using Vector3d = Eigen::Matrix<double, 3, 1>; // For 3D vectors (cartesion position)
 
   [[nodiscard]] controller_interface::InterfaceConfiguration command_interface_configuration() const override;
   [[nodiscard]] controller_interface::InterfaceConfiguration state_interface_configuration() const override;
@@ -50,7 +51,7 @@ class KernelDeePCController final : public controller_interface::ControllerInter
   int T_ini_{20}; // length of past horizon (should match T_past used in data_processing)
   Vector7d k_gains_{Vector7d::Zero()};
   Vector7d d_gains_{Vector7d::Zero()};
-  double ff_gain_{-1.0};
+  double ff_gain_{-1.0}; // TODO: change to 0.0 for no friction compensation (joint impedance control)
 
   // decay parameters (for blending friction compensation)
   double alpha_max_{1.0};
@@ -82,12 +83,12 @@ class KernelDeePCController final : public controller_interface::ControllerInter
   std::deque<Vector7d> y_hist_; // measured tau_ext history
   Vector7d prev_tau_applied_{Vector7d::Zero()}; // u_{k-1}
   Vector7d last_tau_imp_{Vector7d::Zero()};
-  Vector7d last_tau_cmd_{Vector7d::Zero()};
 
   // RobotState subscriber
   rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr state_sub_;
   std::atomic<bool> have_tau_ext_{false};
-  std::array<double, 7> tau_ext_last_{{0, 0, 0, 0, 0, 0, 0}};
+  std::array<double, 7> tau_ext_last_{{0, 0, 0, 0, 0, 0, 0}}; // last received tau_ext
+  std::array<double, 16> o_t_ee_last_{{0.0}}; // last end-effector pose
 
   // Logging
   std::vector<Vector7d> tau_ext_hist_;
@@ -95,6 +96,11 @@ class KernelDeePCController final : public controller_interface::ControllerInter
   std::vector<Vector7d> tau_residual_hist_;
   std::vector<Vector7d> q_des_hist_;
   std::vector<Vector7d> q_curr_hist_;
+
+  std::atomic<bool> have_ee_pose_{false};
+  Vector3d ee_pos_last_{Vector3d::Zero()};
+  std::vector<Vector3d> ee_pos_hist_;
+
   std::vector<double> t_hist_;
 
   int  log_decimation_{1};

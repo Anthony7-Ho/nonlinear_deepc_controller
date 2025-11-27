@@ -46,7 +46,7 @@ CallbackReturn KernelDeePCController::on_init() {
     auto_declare<std::vector<double>>("d_gains", {2,2,2,1,1,1,0.5});
     auto_declare<std::string>("csv_path", std::string(std::getenv("HOME")) + "/trajectory_test.csv"); // TODO: change
     auto_declare<std::string>("log_path", std::string(std::getenv("HOME")) + 
-        "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/tau_ext_test_kernel.csv"); // TODO: change
+        "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/test_log_kernel.csv"); // TODO: change
     auto_declare<std::string>("robot_state_topic", "/franka_robot_state_broadcaster/robot_state");
 
     // Kernel bundle dir (relative under package share)
@@ -105,11 +105,20 @@ CallbackReturn KernelDeePCController::on_configure(const rclcpp_lifecycle::State
       robot_state_topic_, rclcpp::QoS(rclcpp::KeepLast(5)).reliable(),
       [this](const franka_msgs::msg::FrankaRobotState& msg) {
         if (msg.tau_ext_hat_filtered.effort.size() >= static_cast<size_t>(num_joints)) {
+          // read friction torque
           for (int i = 0; i < num_joints; ++i) {
             tau_ext_last_[i] = msg.tau_ext_hat_filtered.effort[i];
           }
           have_tau_ext_.store(true, std::memory_order_release);
         }
+
+        // end-effector position from PoseStamped
+        const auto & p = msg.o_t_ee.pose.position;   // <- PoseStamped
+        ee_pos_last_(0) = p.x;
+        ee_pos_last_(1) = p.y;
+        ee_pos_last_(2) = p.z;
+        have_ee_pose_.store(true, std::memory_order_release);
+
       });
 
   // Logging params
@@ -165,6 +174,7 @@ CallbackReturn KernelDeePCController::on_activate(
   tau_residual_hist_.clear();
   q_des_hist_.clear();
   q_curr_hist_.clear();
+  ee_pos_hist_.clear();
   t_hist_.clear();
 
   resetHistories();
@@ -220,15 +230,23 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
 
   // Latest external torque
   Vector7d tau_ext = Vector7d::Zero();
-  // last applied torque
-  Vector7d last_tau_cmd_ = Vector7d::Zero();
 
   // joint states
   Vector7d q_curr = Vector7d::Zero();
   Vector7d q_des = Vector7d::Zero();
 
+  // cartesian end-effector position
+  Vector3d ee_pos = Vector3d::Zero();
+
   if (have_tau_ext_.load(std::memory_order_acquire)) {
-    for (int i = 0; i < num_joints; ++i) tau_ext(i) = tau_ext_last_[i];
+    for (int i = 0; i < num_joints; ++i) {
+      tau_ext(i) = tau_ext_last_[i];
+    }
+
+  if (have_ee_pose_.load(std::memory_order_acquire)) {
+    ee_pos = ee_pos_last_;  // just copy the vector
+  }
+
   }
 
   Vector7d tau_cmd = Vector7d::Zero(); // default: 0 torque
@@ -293,7 +311,6 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
       if (alpha > alpha_max_) alpha = alpha_max_;
 
       tau_cmd = tau_imp - ff_gain_ * friction_pred;
-      last_tau_cmd_ = tau_cmd;
 
       // update histories with one-step delay
       pushUHistory(tau_cmd);
@@ -322,6 +339,7 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
 
       Vector7d tau_resid = tau_ext - friction_pred;
       tau_residual_hist_.push_back(tau_resid);
+      ee_pos_hist_.push_back(ee_pos);
 
       t_hist_.push_back(elapsed_time_);
       log_counter_ = 0;
@@ -411,39 +429,94 @@ void KernelDeePCController::writeLogCsv(const std::string& path) const {
   std::ofstream out(path);
   if (!out.is_open()) throw std::runtime_error("cannot open log file");
 
-  const size_t N = std::min({t_hist_.size(), tau_ext_hist_.size(), friction_pred_hist_.size(), tau_residual_hist_.size()});
+  const size_t N = std::min({t_hist_.size(), tau_ext_hist_.size(), friction_pred_hist_.size(), tau_residual_hist_.size(), 
+                            q_des_hist_.size(), q_curr_hist_.size(), ee_pos_hist_.size()});
 
-  out << "label";
-  out << std::fixed << std::setprecision(6);
-  for (size_t c = 0; c < N; ++c) {
-    out << ",t_" << t_hist_[c];
+  // Header
+  out << "time_s";
+  for (int j = 0; j < num_joints; ++j) {
+    out << ",tau_ext_" << j;
   }
+  for (int j = 0; j < num_joints; ++j) {
+    out << ",friction_pred_" << j;
+  }
+  for (int j = 0; j < num_joints; ++j) {
+    out << ",tau_residual_" << j;
+  }
+  for (int j = 0; j < num_joints; ++j) {
+    out << ",q_des_" << j;
+  }
+  for (int j = 0; j < num_joints; ++j) {
+    out << ",q_curr_" << j;
+  }
+  out << ",x,y,z";
   out << "\n";
 
-  auto write_row = [&](const std::string& label, int joint_idx, const std::vector<Vector7d>& data) {
-    out << label;
-    out << std::setprecision(10);
-    for (size_t c = 0; c < N; ++c) {
-      out << "," << data[c](joint_idx);
+  out << std::fixed << std::setprecision(6);
+
+  for (size_t i = 0; i < N; ++i) {
+    // time column
+    out << t_hist_[i];
+
+    // tau_ext columns
+    for (int j = 0; j < num_joints; ++j)
+      out << "," << tau_ext_hist_[i](j);
+
+    // friction_prediction columns
+    if (i < friction_pred_hist_.size()) {
+      for (int j = 0; j < num_joints; ++j) {
+        out << "," << friction_pred_hist_[i](j);
+      }
+    } else {
+      for (int j = 0; j < num_joints; ++j) {
+        out << ",0.0";
+      }
+    }
+
+    // tau_residual columns
+    if (i < tau_residual_hist_.size()) {
+      for (int j = 0; j < num_joints; ++j) {
+        out << "," << tau_residual_hist_[i](j);
+      }
+    } else {
+      for (int j = 0; j < num_joints; ++j) {
+        out << ",0.0";
+      }
+    }
+
+    // q_state columns
+    if (i < q_curr_hist_.size()) {
+      for (int j = 0; j < num_joints; ++j) {
+        out << "," << q_curr_hist_[i](j);
+      }
+    } else {
+      for (int j = 0; j < num_joints; ++j) {
+        out << ",0.0";
+      }
+    }
+
+    // q_des columns
+    if (i < q_des_hist_.size()) {
+      for (int j = 0; j < num_joints; ++j) {
+        out << "," << q_des_hist_[i](j);
+      }
+    } else {
+      for (int j = 0; j < num_joints; ++j) {
+        out << ",0.0";
+      }
+    }
+
+    // ee_pos columns
+    if (i < ee_pos_hist_.size()) {
+          out << "," << ee_pos_hist_[i](0)
+              << "," << ee_pos_hist_[i](1)
+              << "," << ee_pos_hist_[i](2);
+    } else {
+      out << ",0.0,0.0,0.0";
     }
     out << "\n";
-  };
+  }
 
-  for (int j = 0; j < num_joints; ++j) {
-    write_row("tau_ext_" + std::to_string(j), j, tau_ext_hist_);
-  }
-  for (int j = 0; j < num_joints; ++j) {
-    write_row("friction_pred_" + std::to_string(j), j, friction_pred_hist_);
-  }
-  for (int j = 0; j < num_joints; ++j) {
-    write_row("tau_residual_" + std::to_string(j), j, tau_residual_hist_);
-  }
-  for (int j = 0; j < num_joints; ++j) {
-    write_row("q_des_" + std::to_string(j), j, q_des_hist_);
-  }
-  for (int j = 0; j < num_joints; ++j) {
-    write_row("q_curr_" + std::to_string(j), j, q_curr_hist_);
-  }
 }
 
 // Histories
@@ -558,8 +631,8 @@ bool KernelDeePCController::loadKernelBundle(const std::string& dir) {
         return false;
       }
       if (std::fabs(rbf_scale_meta - rbf_scale_) > 1e-7 ||
-          std::fabs(lambda_g_meta  - lambda_g_)  > 1e-5 ||
-          std::fabs(lambda_k_meta  - lambda_k_)  > 1e-2) {
+          std::fabs(lambda_g_meta - lambda_g_)  > 1e-5 ||
+          std::fabs(lambda_k_meta - lambda_k_)  > 1e-2) {
         RCLCPP_WARN(get_node()->get_logger(), "Hyperparameters differ in joint %d meta.json; using joint_0 values.", j);
       }
     }
