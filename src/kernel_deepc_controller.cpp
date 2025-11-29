@@ -42,8 +42,8 @@ KernelDeePCController::state_interface_configuration() const {
 CallbackReturn KernelDeePCController::on_init() {
   try {
     auto_declare<std::string>("arm_id", "fr3");
-    auto_declare<std::vector<double>>("k_gains", {24,24,24,24,10,6,2});
-    auto_declare<std::vector<double>>("d_gains", {2,2,2,1,1,1,0.5});
+    auto_declare<std::vector<double>>("k_gains", {5,5,5,5,3,2,1});
+    auto_declare<std::vector<double>>("d_gains", {0.5,0.5,0.5,0.3,0.3,0.2,0.1});
     auto_declare<std::string>("csv_path", std::string(std::getenv("HOME")) + "/trajectory_test.csv"); // TODO: change
     auto_declare<std::string>("log_path", std::string(std::getenv("HOME")) + 
         "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/test_log_kernel.csv"); // TODO: change
@@ -274,6 +274,8 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
       elapsed_time_ += period.seconds();
       time_since_friction_prediction_ += period.seconds();
 
+      //RCLCPP_INFO_STREAM(get_node()->get_logger(), "K-gains: " << k_gains_.transpose().format(Eigen::IOFormat()));
+
       if (!first_update_) {
         pushYHistory(tau_ext);
       } else {
@@ -316,6 +318,13 @@ KernelDeePCController::update(const rclcpp::Time& /*time*/, const rclcpp::Durati
       pushUHistory(tau_cmd);
       //pushYHistory(tau_ext);
       prev_tau_applied_ = tau_cmd;
+
+      /*
+      RCLCPP_INFO_STREAM(get_node()->get_logger(),"impedance torque: " << tau_imp.transpose().format(Eigen::IOFormat()));
+      RCLCPP_INFO_STREAM(get_node()->get_logger(),"friction prediction: " << friction_pred.transpose().format(Eigen::IOFormat()));
+      RCLCPP_INFO_STREAM(get_node()->get_logger(),"command torque: " << tau_cmd.transpose().format(Eigen::IOFormat()));
+      */
+
       break;
     }
   }
@@ -484,10 +493,10 @@ void KernelDeePCController::writeLogCsv(const std::string& path) const {
       }
     }
 
-    // q_state columns
-    if (i < q_curr_hist_.size()) {
+    // q_des columns
+    if (i < q_des_hist_.size()) {
       for (int j = 0; j < num_joints; ++j) {
-        out << "," << q_curr_hist_[i](j);
+        out << "," << q_des_hist_[i](j);
       }
     } else {
       for (int j = 0; j < num_joints; ++j) {
@@ -495,10 +504,10 @@ void KernelDeePCController::writeLogCsv(const std::string& path) const {
       }
     }
 
-    // q_des columns
-    if (i < q_des_hist_.size()) {
+    // q_state columns
+    if (i < q_curr_hist_.size()) {
       for (int j = 0; j < num_joints; ++j) {
-        out << "," << q_des_hist_[i](j);
+        out << "," << q_curr_hist_[i](j);
       }
     } else {
       for (int j = 0; j < num_joints; ++j) {
