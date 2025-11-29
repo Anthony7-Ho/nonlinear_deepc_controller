@@ -11,6 +11,8 @@
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include <builtin_interfaces/msg/duration.hpp>
 #include <Eigen/Geometry>
+#include <franka_msgs/msg/franka_robot_state.hpp>
+#include <thread>
 
 #include <random>
 #include <fstream>
@@ -32,15 +34,16 @@ static const double X_MIN = 0.30, X_MAX = 0.70;
 static const double Y_MIN = -0.40, Y_MAX = 0.40;
 static const double Z_MIN = 0.40, Z_MAX = 0.70;
 // Velocity and acceleration scaling for MoveIt
+// TODO: adjust depending on task
 static const double VEL_MIN = 0.05;
-static const double VEL_MAX = 0.15;
-static const double ACC_SCALE = 0.10;
+static const double VEL_MAX = 0.07;
+static const double ACC_SCALE = 0.80;
 
 static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_test.csv"; //TODO: change path
-/* TODO: Only add for the test trajectory!!
+// TODO: Only add for the test trajectory!!
 static const std::string CSV_EE_OUT = std::string(std::getenv("HOME")) + 
         "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/cartesian_ref.csv"; // TODO: change path if you want
-*/
+
 
 // Convert builtin Duration + rclcpp::Duration -> builtin Duration
 inline builtin_interfaces::msg::Duration add_duration(
@@ -145,10 +148,69 @@ static void append_dwell(moveit_msgs::msg::RobotTrajectory &traj, double dwell_s
   append_trajectory(traj, hold, /*skip_first_src_point=*/false);
 }
 
+
+class EELogger {
+/*
+  Logs end-effector position to a CSV file upon receiving
+  FrankaRobotState messages.
+*/
+public:
+  EELogger(const rclcpp::Node::SharedPtr& node, const std::string& topic, const std::string& csv_path)
+  : node_(node)
+  {
+    ofs_.open(csv_path);
+    if (!ofs_.is_open()) {
+      RCLCPP_ERROR(node_->get_logger(), "EELogger: could not open %s", csv_path.c_str());
+      return;
+    }
+
+    // Header
+    ofs_ << std::fixed << std::setprecision(9);
+    ofs_ << "time_s,x,y,z\n";
+
+    start_time_ = node_->get_clock()->now();
+
+    sub_ = node_->create_subscription<franka_msgs::msg::FrankaRobotState>(
+      topic,
+      rclcpp::QoS(rclcpp::KeepLast(5)).reliable(),
+      std::bind(&EELogger::callback, this, std::placeholders::_1));
+  }
+
+  ~EELogger() {
+    if (ofs_.is_open()) {
+      ofs_.close();
+    }
+  }
+
+private:
+  void callback(const franka_msgs::msg::FrankaRobotState::SharedPtr msg) {
+    if (!ofs_.is_open()) return;
+
+    // elapsed time since logger was created (seconds)
+    const auto now = node_->get_clock()->now();
+    double t = (now - start_time_).seconds();
+
+    const auto& p = msg->o_t_ee.pose.position;
+    ofs_ << t << "," << p.x << "," << p.y << "," << p.z << "\n";
+  }
+
+  rclcpp::Node::SharedPtr node_;
+  rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr sub_;
+  rclcpp::Time start_time_;
+  std::ofstream ofs_;
+};
+
+
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   auto node = rclcpp::Node::make_shared("create_random_trajectory");
   auto logger = node->get_logger();
+
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node);
+  std::thread spin_thread([&executor]() {
+    executor.spin();
+  });
 
   // Publisher for RViz display
   auto disp_pub = node->create_publisher<moveit_msgs::msg::DisplayTrajectory>(
@@ -165,6 +227,12 @@ int main(int argc, char **argv) {
   move_group.setPlanningTime(5.0);
   move_group.setNumPlanningAttempts(3);
   move_group.setMaxAccelerationScalingFactor(ACC_SCALE);
+
+  auto ee_logger = std::make_shared<EELogger>(
+    node,
+    "/franka_robot_state_broadcaster/robot_state",
+    CSV_EE_OUT
+  );
 
   RCLCPP_INFO(logger, "Planning with group='%s', eef='%s', base='%s'",
               GROUP_NAME.c_str(), EEF_LINK.c_str(), BASE_FRAME.c_str());
@@ -410,7 +478,7 @@ int main(int argc, char **argv) {
   } catch (const std::exception &e) {
     RCLCPP_ERROR(logger, "CSV post-processing failed: %s", e.what());
   }
-  /* TODO: Uncomment for logging reference end-effector positions
+  /*//TODO: Uncomment for logging reference end-effector positions
   // Save end-effector x,y,z over time to a separate CSV
   try {
     const auto &jt = combined.joint_trajectory;
@@ -453,7 +521,8 @@ int main(int argc, char **argv) {
     RCLCPP_ERROR(logger, "EE CSV write failed: %s", e.what());
   }
   */
-
+  executor.cancel();
+  spin_thread.join();
   rclcpp::shutdown();
   return 0;
 }
