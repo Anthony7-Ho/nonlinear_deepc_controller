@@ -51,6 +51,7 @@ ament_target_dependencies(create_random_trajectory
   moveit_ros_planning_interface
   moveit_msgs
   geometry_msgs
+  franka_msgs
 )
 
 install(PROGRAMS
