@@ -54,6 +54,14 @@ ament_target_dependencies(create_random_trajectory
   franka_msgs
 )
 
+add_executable(print_current_jacobian src/print_current_jacobian.cpp)
+ament_target_dependencies(print_current_jacobian
+  rclcpp
+  sensor_msgs
+  moveit_ros_planning_interface
+  moveit_msgs
+)
+
 install(PROGRAMS
 scripts/kernel_deepc_optimization.py
 DESTINATION lib/${PROJECT_NAME}
@@ -63,6 +71,7 @@ DESTINATION lib/${PROJECT_NAME}
 install(TARGETS
   ${PROJECT_NAME}
   create_random_trajectory
+  print_current_jacobian
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -77,7 +86,6 @@ install(
   DIRECTORY data_processing/kernel_deepc_bundle/
   DESTINATION share/${PROJECT_NAME}/data/kernel_deepc_bundle
 )
-
 
 
 install(DIRECTORY include/
