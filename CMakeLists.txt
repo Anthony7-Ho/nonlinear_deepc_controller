@@ -62,6 +62,11 @@ ament_target_dependencies(print_current_jacobian
   moveit_msgs
 )
 
+add_executable(cartesian_trajectory_generator src/cartesian_trajectory_generator.cpp)
+ament_target_dependencies(cartesian_trajectory_generator
+  rclcpp
+)
+
 install(PROGRAMS
 scripts/kernel_deepc_optimization.py
 DESTINATION lib/${PROJECT_NAME}
@@ -72,6 +77,7 @@ install(TARGETS
   ${PROJECT_NAME}
   create_random_trajectory
   print_current_jacobian
+  cartesian_trajectory_generator
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
