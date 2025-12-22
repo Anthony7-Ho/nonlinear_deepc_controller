@@ -11,4 +11,10 @@
     base_class_type="controller_interface::ControllerInterface">
     <description>Kernel based DeePC for friction compensation paired with a joint impedance tracking controller</description>
   </class>
+  <class
+    name="nonlinear_deepc_controller/KernelCartesianImpedanceController"
+    type="nonlinear_deepc_controller::KernelCartesianImpedanceController"
+    base_class_type="controller_interface::ControllerInterface">
+    <description>Cartesian Impedance controller with a kernel based friction predictor</description>
+  </class>
 </library>

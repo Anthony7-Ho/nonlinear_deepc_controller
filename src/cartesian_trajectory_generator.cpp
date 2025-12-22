@@ -7,16 +7,19 @@
 
 int main() {
     const double dt = 0.001; // 1 ms sampling
-    const double total_time = 35.0; // total trajectory duration [s] (includes initial hold)
+    const double total_time = 75.0; // total trajectory duration [s] (includes initial hold)
     const double initial_hold = 5.0; // initial flat segment [s]
-    const double dwell_time = 3.0; // dwell duration at each peak [s]
+    const double dwell_time = 7.0; // dwell duration at each peak [s]
 
     // Initial pose
-    const double x0 = 0.5;
+    const double x0 = 0.4;
     const double y0 = 0.0;
     const double z0 = 0.4;
 
-    const double amplitude = 0.3; // [m]
+    const double amplitude_x = 0.2; // [m]
+    const double amplitude_y = 0.2;
+    const double amplitude_z = 0.2;
+
     const double frequency = 0.1; // [Hz]
 
     // Fixed orientation: "end-effector pointing down"
@@ -31,10 +34,10 @@ int main() {
         std::cerr << "ERROR: Cannot determine $HOME directory.\n";
         return 1;
     }
-    std::string CSV_OUT = std::string(home) + "/cartesian_test_z.csv"; //TODO: change path if you want
+    std::string CSV_OUT = std::string(home) + "/cartesian_test_y.csv"; //TODO: change path if you want
 
     std::string CSV_OUT_REF = std::string(home) + 
-        "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/cartesian_ref_z.csv"; //TODO: change path if you want
+        "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/cartesian_ref_y.csv"; //TODO: change path if you want
 
     std::ofstream file(CSV_OUT);
     if (!file.is_open()) {
@@ -89,9 +92,9 @@ int main() {
                     // Do not advance t_motion while dwelling
                 } else {
                     // Normal sinusoidal motion in y TODO: adjust sinusoid axis if needed
-                    x = x0; //+ amplitude * std::sin(2.0 * M_PI * frequency * t_motion);
-                    y = y0; //+ amplitude * std::sin(2.0 * M_PI * frequency * t_motion);
-                    z = z0 + amplitude * std::sin(2.0 * M_PI * frequency * t_motion);
+                    x = x0; // + amplitude_x * std::sin(2.0 * M_PI * frequency * t_motion);
+                    y = y0 + amplitude_y * std::sin(2.0 * M_PI * frequency * t_motion);
+                    z = z0; // + amplitude_z * std::sin(2.0 * M_PI * frequency * t_motion);
 
                     t_motion += dt; // advance local motion time only in motion phase
                 }

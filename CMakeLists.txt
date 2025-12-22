@@ -25,6 +25,7 @@ include_directories(include ${EIGEN3_INCLUDE_DIRS})
 add_library(${PROJECT_NAME} SHARED
   src/joint_impedance_controller.cpp
   src/kernel_deepc_controller.cpp
+  src/kernel_cartesian_impedance_controller.cpp
 )
 
 ament_target_dependencies(${PROJECT_NAME}
@@ -105,6 +106,11 @@ install(FILES nonlinear_deepc_controller.xml
 
 # Install launch files
 install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
+# Install config files
+install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME}
 )
 
