@@ -14,6 +14,10 @@
 #include <franka/robot_state.h>
 #include <geometry_msgs/msg/wrench_stamped.hpp>
 
+#include "nonlinear_deepc_controller/kernel_bundle.hpp"
+#include "nonlinear_deepc_controller/friction_predictor.hpp"
+#include "nonlinear_deepc_controller/csv_logger.hpp"
+
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
 namespace nonlinear_deepc_controller {
@@ -51,23 +55,17 @@ class KernelCartesianImpedanceController final : public controller_interface::Co
   std::string kernel_bundle_dir_param_;
   std::string kernel_bundle_dir_;
 
+  KernelBundle kernel_bundle_;
+  FrictionPredictor predictor_;
+  CsvLogger logger_;
+
   int T_ini_{20}; // length of past horizon (should match T_past used in data_processing)
   Vector7d k_gains_{Vector7d::Zero()};
   Vector7d d_gains_{Vector7d::Zero()};
-  Eigen::Matrix<double, 7, 1> calibration_ =
-  (Eigen::Matrix<double, 7, 1>() <<
-      1.11,
-      0.86,
-      0.91,
-      1.05,
-      1.01,
-      1.01,
-      1.01
-  ).finished(); // TODO: change to 0.0 for no friction compensation (joint impedance control)
   Vector7d last_pred_{Vector7d::Zero()};
 
-  const double ff_gain_close_{1.2};
-  const double ff_gain_far_{1.6};
+  double alpha_close{1.5};
+  double alpha_far{2.5};
 
   // Constants
   const int num_joints = 7;
@@ -101,21 +99,8 @@ class KernelCartesianImpedanceController final : public controller_interface::Co
   std::atomic<bool> have_tau_ext_{false};
   std::array<double, 7> tau_ext_last_{{0, 0, 0, 0, 0, 0, 0}}; // last received tau_ext
   std::array<double, 16> o_t_ee_last_{{0.0}}; // last end-effector pose
-
-  // Logging
-  std::vector<Vector7d> tau_ext_hist_;
-  std::vector<Vector7d> friction_pred_hist_;
-  std::vector<Vector7d> tau_residual_hist_;
   std::atomic<bool> have_ee_pose_{false};
   Vector3d ee_pos_last_{Vector3d::Zero()};
-  std::vector<Vector3d> ee_pos_hist_;
-  std::vector<double> t_hist_;
-
-  int  log_decimation_{1};
-  int  log_counter_{0};
-  bool stop_logging_at_end_{true};
-  double post_log_window_{0.0};
-  bool logging_active_{true};
 
   double time_since_friction_prediction_{0.0};
 
@@ -231,35 +216,9 @@ class KernelCartesianImpedanceController final : public controller_interface::Co
   
   double filter_params_{0.001};
   int mode_cart_{1};
-  
-  // Kernel DeePC closed-form model (per joint)
-  bool kernel_loaded_{false};
-
-  // Shared dimensions
-  int Hc_{100}; // dimesnion of Kg (Hc x Hc, number of cluster centers from data_processing)
-  int d_full_{50}; // length of stacked regressor [u_ini; y_ini; u_future] -Y (T_past + T_past + T_future)
-
-  // For each joint j:
-  // Kg_list_[j]: (Hc_ x Hc_) -> Kg = K + gamma_reg*I
-  // X_list_[j]: (d_full_ x Hc_) = [Hu_past; Hy_past; Hu_future]
-  // Hy_future_list_[j]: (N_pred_ x Hc_)
-  // X_col_norm2_list_[j]: precomputed ||x_i||^2 for each column of X_list_[j]
-  // A_chol_list_[j]: LLT of A_j = lambda_g I + lambda_k Kg^T Kg
-  std::array<Eigen::MatrixXd, 7> Kg_list_;
-  std::array<Eigen::MatrixXd, 7> X_list_;
-  std::array<Eigen::MatrixXd, 7> Hy_future_list_;
-
-  std::array<Eigen::VectorXd, 7> X_col_norm2_list_;
-  std::array<Eigen::LLT<Eigen::MatrixXd>, 7> A_chol_list_;
-
-  // Hyperparameters (shared across joints, loaded from meta.json
-  double rbf_scale_{0.0}; // RBF gamma (best_gamma_rbf)
-  double lambda_g_{0.0}; // regularization for g
-  double lambda_k_{0.0}; // regularization for kernel
 
   // Helpers
   void updateJointStates();
-  void writeLogCsv(const std::string& path) const;
   void update_stiffness_and_references();
   void arrayToMatrix(const std::array<double, 6>& inputArray, Eigen::Matrix<double, 6, 1>& resultMatrix);
   void arrayToMatrix(const std::array<double, 7>& inputArray, Eigen::Matrix<double, 7, 1>& resultMatrix);
@@ -282,12 +241,5 @@ class KernelCartesianImpedanceController final : public controller_interface::Co
   bool warmupStep(const Vector7d& tau_ext);
   void pushUHistory(const Vector7d& u_curr);
   void pushYHistory(const Vector7d& y_next);
-
-  // Kernel bundle IO (loads all 7 joint_* folders under kernel_bundle_dir_)
-  bool loadKernelBundle(const std::string& dir);
-  bool loadBinMatrix(const std::string& path, int rows, int cols, Eigen::MatrixXd& M);
-
-  // Closed-form friction prediction
-  Vector7d computeFrictionPrediction();
 };
 }  // namespace nonlinear_deepc_controller

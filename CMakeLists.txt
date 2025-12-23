@@ -26,6 +26,8 @@ add_library(${PROJECT_NAME} SHARED
   src/joint_impedance_controller.cpp
   src/kernel_deepc_controller.cpp
   src/kernel_cartesian_impedance_controller.cpp
+  src/kernel_bundle.cpp
+  src/friction_predictor.cpp
 )
 
 ament_target_dependencies(${PROJECT_NAME}
