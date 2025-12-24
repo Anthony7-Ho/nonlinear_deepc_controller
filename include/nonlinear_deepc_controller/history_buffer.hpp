@@ -5,11 +5,11 @@
 
 namespace nonlinear_deepc_controller {
 
-class HistoryBuffer {
 /**
  * Manages histories of applied torques (u) and measured external torques (y)
  * for the Kernel Cartesian Impedance Controller.
  */
+class HistoryBuffer {
  public:
   using Vector7d = Eigen::Matrix<double, 7, 1>;
 

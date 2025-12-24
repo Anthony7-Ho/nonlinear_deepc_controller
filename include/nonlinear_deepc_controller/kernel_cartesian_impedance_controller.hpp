@@ -16,7 +16,7 @@
 
 #include "nonlinear_deepc_controller/kernel_bundle.hpp"
 #include "nonlinear_deepc_controller/friction_predictor.hpp"
-#include "nonlinear_deepc_controller/csv_logger.hpp"
+#include "nonlinear_deepc_controller/logger.hpp"
 #include "nonlinear_deepc_controller/cartesian_trajectory.hpp"
 #include "nonlinear_deepc_controller/history_buffer.hpp"
 
@@ -60,7 +60,7 @@ class KernelCartesianImpedanceController final : public controller_interface::Co
 
   KernelBundle kernel_bundle_;
   FrictionPredictor predictor_;
-  CsvLogger logger_;
+  Logger logger_;
   CartesianTrajectory traj_;
   HistoryBuffer hist_{20};
 

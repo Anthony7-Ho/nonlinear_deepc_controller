@@ -186,8 +186,7 @@ CallbackReturn KernelCartesianImpedanceController::on_configure(const rclcpp_lif
         arrayToMatrix(O_F_ext_hat_K_, O_F_ext_hat_K_M_);
       });
 
-  // Histories + phase
-  hist_.reset();
+  // Phase
   phase_ = Phase::WARMUP;
   time_since_friction_prediction_ = 0.0;
 
@@ -212,6 +211,12 @@ CallbackReturn KernelCartesianImpedanceController::on_configure(const rclcpp_lif
   hist_.setHorizon(T_ini_);
   hist_.reset();
 
+  logger_.configure(
+    get_node()->get_parameter("log_decimation").as_int(),
+    get_node()->get_parameter("stop_logging_at_end").as_bool(),
+    get_node()->get_parameter("post_log_window").as_double());
+  logger_.setHeader(Logger::cartesian_header());
+  
   return CallbackReturn::SUCCESS;
 }
 
@@ -230,13 +235,7 @@ CallbackReturn KernelCartesianImpedanceController::on_activate(const rclcpp_life
   initial_q_ = q_;
   elapsed_time_ = 0.0;
 
-  logger_.configure(
-    get_node()->get_parameter("log_decimation").as_int(),
-    get_node()->get_parameter("stop_logging_at_end").as_bool(),
-    get_node()->get_parameter("post_log_window").as_double()
-  );
   logger_.reset();
-
 
   hist_.reset();
   phase_ = Phase::WARMUP;
@@ -459,14 +458,20 @@ KernelCartesianImpedanceController::update(const rclcpp::Time& /*time*/, const r
     }
   }
 
-  // logging only while tracking
   const double t_end = traj_.empty() ? 0.0 : traj_.tGrid().back();
   logger_.updateActiveWindow(elapsed_time_, t_end);
+
   if (phase_ == Phase::TRACKING) {
-    logger_.push(elapsed_time_, tau_ext, friction_pred, ee_pos);
+    auto row = logger_.makeRow();
+    row.add(elapsed_time_)
+       .addEigenVector(tau_ext)
+       .addEigenVector(friction_pred)
+       .addEigenVector(tau_ext - friction_pred)
+       .add(ee_pos(0)).add(ee_pos(1)).add(ee_pos(2));
+    row.checkSizeOrThrow();
+    logger_.pushRow(row.vec());
   }
-
-
+  
   return controller_interface::return_type::OK;
 }
 

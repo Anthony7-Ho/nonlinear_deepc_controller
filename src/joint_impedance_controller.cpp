@@ -40,7 +40,7 @@ CallbackReturn JointImpedanceController::on_init() {
     auto_declare<std::vector<double>>("d_gains", {2,2,2,1,1,1,0.5});
     auto_declare<std::string>("csv_path", std::string(std::getenv("HOME")) + "/trajectory_validation.csv"); //TODO: change path that controller has to follow
     auto_declare<std::string>("log_path",
-      std::string(std::getenv("HOME")) + "/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_log_validation.csv"); //TODO: change path where it has to store u and tau_ext
+      std::string(std::getenv("HOME")) + "/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/testtest.csv"); //TODO: change path where it has to store u and tau_ext
     auto_declare<std::string>("robot_state_topic", "/franka_robot_state_broadcaster/robot_state");
     auto_declare<int>("log_decimation", 1);
     auto_declare<bool>("stop_logging_at_end", true);
@@ -86,10 +86,16 @@ CallbackReturn JointImpedanceController::on_configure(const rclcpp_lifecycle::St
   }
   dq_filtered_.setZero();
 
-  if (!loadCsvTrajectory(csv_path_)) {
+  if (!traj_.loadFromCsv(csv_path_)) {
     RCLCPP_FATAL(get_node()->get_logger(), "Failed to load trajectory CSV: %s", csv_path_.c_str());
     return CallbackReturn::FAILURE;
   }
+
+  logger_.configure(
+    get_node()->get_parameter("log_decimation").as_int(),
+    get_node()->get_parameter("stop_logging_at_end").as_bool(),
+    get_node()->get_parameter("post_log_window").as_double());
+  logger_.setHeader(Logger::joint_header());
 
   // RobotState subscriber
   state_sub_ = get_node()->create_subscription<franka_msgs::msg::FrankaRobotState>(
@@ -121,27 +127,6 @@ CallbackReturn JointImpedanceController::on_configure(const rclcpp_lifecycle::St
         }
       });
 
-  // Logging params
-  log_decimation_ = get_node()->get_parameter("log_decimation").as_int();
-  if (log_decimation_ < 1) log_decimation_ = 1;
-  stop_logging_at_end_ = get_node()->get_parameter("stop_logging_at_end").as_bool();
-  post_log_window_ = get_node()->get_parameter("post_log_window").as_double();
-  if (post_log_window_ < 0.0) post_log_window_ = 0.0;
-
-  // Prepare histories
-  logging_active_ = true;
-  tau_cmd_hist_.clear();
-  tau_ext_hist_.clear();
-  dq_state_hist_.clear();
-  q_state_hist_.clear();
-  t_hist_.clear();
-  // Reserve to reduce reallocs
-  tau_cmd_hist_.reserve(t_grid_.size() * 1000);
-  tau_ext_hist_.reserve(t_grid_.size() * 1000);
-  dq_state_hist_.reserve(t_grid_.size() * 1000);
-  q_state_hist_.reserve(t_grid_.size() * 1000);
-  t_hist_.reserve(t_grid_.size() * 1000);
-
   return CallbackReturn::SUCCESS;
 }
 
@@ -151,20 +136,14 @@ CallbackReturn JointImpedanceController::on_activate(const rclcpp_lifecycle::Sta
   initial_q_ = q_;
   elapsed_time_ = 0.0;
 
-  logging_active_ = true;
-  log_counter_ = 0;
-  tau_cmd_hist_.clear();
-  tau_ext_hist_.clear();
-  dq_state_hist_.clear();
-  q_state_hist_.clear();
-  t_hist_.clear();
+  logger_.reset();
 
   return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn JointImpedanceController::on_deactivate(const rclcpp_lifecycle::State& /*previous_state*/) {
   try {
-    writeLogCsv(log_path_);
+    logger_.write(log_path_);
     RCLCPP_INFO(get_node()->get_logger(), "Wrote torque log to %s", log_path_.c_str());
   } catch (const std::exception& e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed writing torque log: %s", e.what());
@@ -186,27 +165,15 @@ void JointImpedanceController::updateJointStates() {
   }
 }
 
-// Interpolate data at time t using linear interpolation
-JointImpedanceController::Vector7d
-JointImpedanceController::interp(const std::vector<Vector7d>& data, double t) const {
-  if (t <= t_grid_.front()) return data.front();
-  if (t >= t_grid_.back())  return data.back();
-
-  auto it = std::upper_bound(t_grid_.begin(), t_grid_.end(), t);
-  size_t k = static_cast<size_t>(std::distance(t_grid_.begin(), it) - 1);
-  double t0 = t_grid_[k], t1 = t_grid_[k + 1];
-  double a = (t - t0) / (t1 - t0);
-  return (1.0 - a) * data[k] + a * data[k + 1];
-}
-
+// ======================= Main control loop ========================
 controller_interface::return_type
 JointImpedanceController::update(const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {
   elapsed_time_ += period.seconds();
   updateJointStates();
 
   // Desired from CSV (interpolated)
-  Vector7d q_des = interp(q_traj_, elapsed_time_);
-  Vector7d dq_des = dq_traj_.empty() ? Vector7d::Zero() : interp(dq_traj_, elapsed_time_);
+  Vector7d q_des  = traj_.interpQ(elapsed_time_);
+  Vector7d dq_des = traj_.interpDq(elapsed_time_);
 
   // PD impedance
   constexpr double kAlpha = 0.99;
@@ -245,165 +212,27 @@ JointImpedanceController::update(const rclcpp::Time& /*time*/, const rclcpp::Dur
         tau_ext(0), dq_state(0), q_state(0));
   }
 
-
-  // Per-update logging with stop-at-end guard
-  const double t_end = t_grid_.back();
-  if (stop_logging_at_end_ && elapsed_time_ > t_end + post_log_window_) {
-    logging_active_ = false;
-  }
-
+  // logging
+  const double t_end = traj_.empty() ? 0.0 : traj_.tGrid().back();
+  logger_.updateActiveWindow(elapsed_time_, t_end);
+  
   bool have_all_state =
     have_tau_ext_.load(std::memory_order_acquire) &&
     have_dq_state_.load(std::memory_order_acquire) &&
     have_q_state_.load(std::memory_order_acquire);
-
-  if (logging_active_ && have_all_state) {
-    if (++log_counter_ >= log_decimation_) {
-      tau_cmd_hist_.push_back(tau_cmd);
-      tau_ext_hist_.push_back(tau_ext);
-      dq_state_hist_.push_back(dq_state);
-      q_state_hist_.push_back(q_state);
-      t_hist_.push_back(elapsed_time_);
-      log_counter_ = 0;
-    }
+  
+  if (logger_.active() && have_all_state) {
+    auto row = logger_.makeRow();
+    row.add(elapsed_time_)
+       .addEigenVector(tau_cmd)
+       .addEigenVector(tau_ext)
+       .addEigenVector(q_state)
+       .addEigenVector(dq_state);
+    row.checkSizeOrThrow();
+    logger_.pushRow(row.vec());
   }
 
   return controller_interface::return_type::OK;
-}
-
-// Load trajectory from CSV file
-bool JointImpedanceController::loadCsvTrajectory(const std::string& path) {
-  std::ifstream f(path);
-  if (!f.is_open()) return false;
-
-  std::string line;
-  if (!std::getline(f, line)) return false;
-
-  // Parse header
-  std::vector<std::string> cols;
-  {
-    std::stringstream ss(line);
-    std::string c;
-    while (std::getline(ss, c, ',')) cols.push_back(c);
-  }
-  auto col_index = [&](const std::string& name)->int{
-    for (size_t i = 0; i < cols.size(); ++i) {
-      if (cols[i] == name) return static_cast<int>(i);
-    }
-    return -1;
-  };
-
-  int t_idx = col_index("time_s");
-  if (t_idx < 0) t_idx = col_index("t");
-
-  int q_idx[7];
-  for (int i = 0; i < 7; ++i) q_idx[i] = col_index("q_" + std::to_string(i));
-
-  int dq_idx[7];
-  bool have_dq = true;
-  for (int i = 0; i < 7; ++i) {
-    dq_idx[i] = col_index("dq_" + std::to_string(i));
-    if (dq_idx[i] < 0) have_dq = false;
-  }
-
-  if (t_idx < 0) return false;
-  for (int i = 0; i < 7; ++i) if (q_idx[i] < 0) return false;
-
-  t_grid_.clear(); q_traj_.clear(); dq_traj_.clear();
-
-  while (std::getline(f, line)) {
-    if (line.empty()) continue;
-    std::stringstream ss(line);
-    std::string tok; std::vector<double> vals;
-    while (std::getline(ss, tok, ',')) {
-      if (tok.empty() || tok == " ") { vals.push_back(0.0); continue; }
-      vals.push_back(std::stod(tok));
-    }
-    if (static_cast<int>(vals.size()) <= t_idx) continue;
-
-    double t = vals[t_idx];
-    Vector7d q;
-    for (int i = 0; i < 7; ++i) q(i) = vals[q_idx[i]];
-    t_grid_.push_back(t);
-    q_traj_.push_back(q);
-
-    if (have_dq) {
-      Vector7d dq;
-      for (int i = 0; i < 7; ++i) dq(i) = vals[dq_idx[i]];
-      dq_traj_.push_back(dq);
-    }
-  }
-
-  return !t_grid_.empty();
-}
-
-void JointImpedanceController::writeLogCsv(const std::string& path) const {
-  std::ofstream out(path);
-  if (!out.is_open()) throw std::runtime_error("cannot open log file");
-
-  // Use the shortest length across the three histories.
-  const size_t N = std::min({t_hist_.size(), tau_cmd_hist_.size(), tau_ext_hist_.size(), dq_state_hist_.size(), q_state_hist_.size()});
-
-  // Header
-  out << "time_s";
-  for (int j = 0; j < num_joints; ++j) {
-    out << ",tau_cmd_" << j;
-  }
-  for (int j = 0; j < num_joints; ++j) {
-    out << ",tau_ext_" << j;
-  }
-  for (int j = 0; j < num_joints; ++j) {
-    out << ",q_state_" << j;
-  }
-  for (int j = 0; j < num_joints; ++j) {
-    out << ",dq_state_" << j;
-  }
-  out << "\n";
-
-  out << std::fixed << std::setprecision(6);
-
-  for (size_t i = 0; i < N; ++i) {
-    // time column
-    out << t_hist_[i];
-
-    // tau_cmd columns
-    for (int j = 0; j < num_joints; ++j)
-      out << "," << tau_cmd_hist_[i](j);
-
-    // tau_ext columns
-    if (i < tau_ext_hist_.size()) {
-      for (int j = 0; j < num_joints; ++j) {
-        out << "," << tau_ext_hist_[i](j);
-      }
-    } else {
-      for (int j = 0; j < num_joints; ++j) {
-        out << ",0.0";
-      }
-    }
-
-    // q_state columns
-    if (i < q_state_hist_.size()) {
-      for (int j = 0; j < num_joints; ++j) {
-        out << "," << q_state_hist_[i](j);
-      }
-    } else {
-      for (int j = 0; j < num_joints; ++j) {
-        out << ",0.0";
-      }
-    }
-    // dq_state columns
-    if (i < dq_state_hist_.size()) {
-      for (int j = 0; j < num_joints; ++j) {
-        out << "," << dq_state_hist_[i](j);
-      }
-    } else {
-      for (int j = 0; j < num_joints; ++j) {
-        out << ",0.0";
-      }
-    }
-
-    out << "\n";
-  }
 }
 
 }  // namespace nonlinear_deepc_controller

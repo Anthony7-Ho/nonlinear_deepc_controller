@@ -53,12 +53,20 @@ def generate_launch_description():
         }.items()
     )
 
+    # Parameters for the controller
+    controller_param_file = PathJoinSubstitution([
+        FindPackageShare('nonlinear_deepc_controller'),
+        'config',
+        'joint_impedance_controller.yaml'
+    ])
+
     # Spawn controller
     # Instance name: joint_impedance_controller
     # Type: must match plugin class name in the XML:
     spawner_args = [
         'joint_impedance_controller',
         '--controller-type', 'nonlinear_deepc_controller/JointImpedanceController',
+        '--param-file', controller_param_file,
     ]
 
     spawner_no_params = Node(

@@ -9,6 +9,8 @@
 #include <controller_interface/controller_interface.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <franka_msgs/msg/franka_robot_state.hpp>
+#include "nonlinear_deepc_controller/joint_trajectory.hpp"
+#include "nonlinear_deepc_controller/logger.hpp"
 
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
@@ -52,22 +54,10 @@ class JointImpedanceController final : public controller_interface::ControllerIn
   double elapsed_time_{0.0};
 
   // Trajectory (from CSV)
-  std::vector<double> t_grid_;
-  std::vector<Vector7d> q_traj_;
-  std::vector<Vector7d> dq_traj_;
+  JointTrajectory traj_;
 
-  // logging (controller-rate)
-  std::vector<Vector7d> tau_cmd_hist_;
-  std::vector<Vector7d> tau_ext_hist_;
-  std::vector<Vector7d> dq_state_hist_;
-  std::vector<Vector7d> q_state_hist_;
-  std::vector<double> t_hist_; // controller-time stamps
-  int  log_decimation_{1}; // log every Nth update
-  int  log_counter_{0};
-  bool stop_logging_at_end_{true};
-  double post_log_window_{0.0};
-  bool logging_active_{true};
-  
+  // Logger
+  Logger logger_;
 
   // RobotState subscriber
   rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr state_sub_;
@@ -80,9 +70,6 @@ class JointImpedanceController final : public controller_interface::ControllerIn
 
   // Helpers
   void updateJointStates();
-  bool loadCsvTrajectory(const std::string& path);
-  void writeLogCsv(const std::string& path) const;
-  Vector7d interp(const std::vector<Vector7d>& data, double t) const;
 };
 
 }  // namespace nonlinear_deepc_controller
