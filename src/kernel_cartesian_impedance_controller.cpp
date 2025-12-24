@@ -137,6 +137,7 @@ CallbackReturn KernelCartesianImpedanceController::on_configure(const rclcpp_lif
     }
   }
 
+  // Sanity check: diagonal entries non-negative
   for (int i = 0; i < 6; ++i) {
     if (K_(i, i) < 0.0) {
       RCLCPP_FATAL(get_node()->get_logger(), "cartesian_stiffness diagonal entry K_(%d,%d) must be non-negative. Got %.3f", i, i, K_(i, i));
