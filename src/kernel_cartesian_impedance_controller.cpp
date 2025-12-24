@@ -66,12 +66,26 @@ CallbackReturn KernelCartesianImpedanceController::on_init() {
 
     // Kernel bundle dir (relative under package share)
     auto_declare<std::string>("kernel_bundle_dir", "data/kernel_deepc_bundle");
-
+    
+    // Hyperparams
     auto_declare<int>("T_ini", 20); // length of past horizon (should match T_past used in data_processing)
     auto_declare<double>("alpha_close", 1.5);
     auto_declare<double>("alpha_far", 2.5);
     auto_declare<double>("r0", 0.55);
     auto_declare<double>("beta", 0.5);
+
+    // cartesian stiffness
+    auto_declare<std::vector<double>>(
+      "cartesian_stiffness",
+      std::vector<double>{
+          3000,0,0,0,0,0,
+          0,3000,0,0,0,0,
+          0,0,3000,0,0,0,
+          0,0,0,100,0,0,
+          0,0,0,0,100,0,
+          0,0,0,0,0,100
+    });
+
 
     // Logging params
     auto_declare<int>("log_decimation", 1);
@@ -97,6 +111,38 @@ CallbackReturn KernelCartesianImpedanceController::on_configure(const rclcpp_lif
   alpha_far = get_node()->get_parameter("alpha_far").as_double();
   r0 = get_node()->get_parameter("r0").as_double();
   beta = get_node()->get_parameter("beta").as_double();
+
+  const auto k_vec = get_node()->get_parameter("cartesian_stiffness").as_double_array();
+
+  // Expect 36 values (row-major 6x6)
+  if (k_vec.size() != 36) {
+    RCLCPP_FATAL(get_node()->get_logger(), "Parameter 'cartesian_stiffness' must have 36 doubles (6x6 row-major). Got %zu", k_vec.size());
+    return CallbackReturn::FAILURE;
+  }
+
+  for (int r = 0; r < 6; ++r) {
+    for (int c = 0; c < 6; ++c) {
+      K_(r, c) = k_vec[static_cast<size_t>(r * 6 + c)];
+    }
+  }
+
+  // Sanity check: K_ must be diagonal
+  constexpr double eps = 1e-9;
+  for (int r = 0; r < 6; ++r) {
+    for (int c = 0; c < 6; ++c) {
+      if (r != c && std::abs(K_(r, c)) > eps) {
+        RCLCPP_FATAL(get_node()->get_logger(), "cartesian_stiffness must be diagonal. " "Found K_(%d,%d) = %.3e", r, c, K_(r, c));
+        return CallbackReturn::FAILURE;
+      }
+    }
+  }
+
+  for (int i = 0; i < 6; ++i) {
+    if (K_(i, i) < 0.0) {
+      RCLCPP_FATAL(get_node()->get_logger(), "cartesian_stiffness diagonal entry K_(%d,%d) must be non-negative. Got %.3f", i, i, K_(i, i));
+      return CallbackReturn::FAILURE;
+    }
+  }
 
   try {
     franka_robot_model_ = std::make_unique<franka_semantic_components::FrankaRobotModel>(
@@ -396,7 +442,7 @@ KernelCartesianImpedanceController::update(const rclcpp::Time& /*time*/, const r
 
       Eigen::Matrix<double,7,1> tau_des = tau_cart + tau_ff_partial;
 
-      Eigen::Matrix<double,7,1> tau_cmd = saturateTorqueRateFF(tau_des, tau_J_d_M_);
+      tau_cmd = saturateTorqueRateFF(tau_des, tau_J_d_M_);
       tau_J_d_M_ = tau_cmd;
       
       // Update histories

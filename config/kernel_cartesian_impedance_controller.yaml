@@ -13,3 +13,11 @@ kernel_cartesian_impedance_controller:
     alpha_far: 0.0 # 2.5 gain scheduling parameter when far from target
     r0: 0.55 # 0.55 radius for gain scheduling
     beta: 0.5 # 0.5 exponent for gain scheduling
+    cartesian_stiffness: [ # cartesian stiffness matrix K
+      3000.0, 0.0,    0.0,    0.0,   0.0,   0.0,
+      0.0,    3000.0, 0.0,    0.0,   0.0,   0.0,
+      0.0,    0.0,    3000.0, 0.0,   0.0,   0.0,
+      0.0,    0.0,    0.0,    100.0, 0.0,   0.0,
+      0.0,    0.0,    0.0,    0.0,   100.0, 0.0,
+      0.0,    0.0,    0.0,    0.0,   0.0,   100.0
+    ]

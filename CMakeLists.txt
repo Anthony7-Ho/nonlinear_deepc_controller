@@ -24,7 +24,6 @@ include_directories(include ${EIGEN3_INCLUDE_DIRS})
 # Controller library
 add_library(${PROJECT_NAME} SHARED
   src/joint_impedance_controller.cpp
-  src/kernel_deepc_controller.cpp
   src/kernel_cartesian_impedance_controller.cpp
   src/kernel_bundle.cpp
   src/friction_predictor.cpp
@@ -71,10 +70,10 @@ ament_target_dependencies(cartesian_trajectory_generator
   rclcpp
 )
 
-install(PROGRAMS
-scripts/kernel_deepc_optimization.py
-DESTINATION lib/${PROJECT_NAME}
-)
+# install(PROGRAMS
+# scripts/kernel_deepc_optimization.py
+# DESTINATION lib/${PROJECT_NAME}
+# )
 
 # Install
 install(TARGETS
