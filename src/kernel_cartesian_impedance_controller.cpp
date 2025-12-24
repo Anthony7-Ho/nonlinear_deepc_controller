@@ -70,6 +70,8 @@ CallbackReturn KernelCartesianImpedanceController::on_init() {
     auto_declare<int>("T_ini", 20); // length of past horizon (should match T_past used in data_processing)
     auto_declare<double>("alpha_close", 1.5);
     auto_declare<double>("alpha_far", 2.5);
+    auto_declare<double>("r0", 0.55);
+    auto_declare<double>("beta", 0.5);
 
     // Logging params
     auto_declare<int>("log_decimation", 1);
@@ -93,6 +95,8 @@ CallbackReturn KernelCartesianImpedanceController::on_configure(const rclcpp_lif
   T_ini_ = get_node()->get_parameter("T_ini").as_int();
   alpha_close = get_node()->get_parameter("alpha_close").as_double();
   alpha_far = get_node()->get_parameter("alpha_far").as_double();
+  r0 = get_node()->get_parameter("r0").as_double();
+  beta = get_node()->get_parameter("beta").as_double();
 
   try {
     franka_robot_model_ = std::make_unique<franka_semantic_components::FrankaRobotModel>(
@@ -104,11 +108,10 @@ CallbackReturn KernelCartesianImpedanceController::on_configure(const rclcpp_lif
     return CallbackReturn::FAILURE;
   }
 
-  if (!loadCartesianTrajectory(csv_path_)) {
+  if (!traj_.loadFromCsv(csv_path_)) {
     RCLCPP_FATAL(get_node()->get_logger(), "Failed to load Cartesian trajectory CSV: %s", csv_path_.c_str());
     return CallbackReturn::FAILURE;
   }
-
 
   // RobotState subscriber
   state_sub_ = get_node()->create_subscription<franka_msgs::msg::FrankaRobotState>(
@@ -137,7 +140,7 @@ CallbackReturn KernelCartesianImpedanceController::on_configure(const rclcpp_lif
       });
 
   // Histories + phase
-  resetHistories();
+  hist_.reset();
   phase_ = Phase::WARMUP;
   time_since_friction_prediction_ = 0.0;
 
@@ -158,6 +161,9 @@ CallbackReturn KernelCartesianImpedanceController::on_configure(const rclcpp_lif
 
   predictor_.configure(T_ini_);
   predictor_.setBundle(&kernel_bundle_);
+
+  hist_.setHorizon(T_ini_);
+  hist_.reset();
 
   return CallbackReturn::SUCCESS;
 }
@@ -185,7 +191,7 @@ CallbackReturn KernelCartesianImpedanceController::on_activate(const rclcpp_life
   logger_.reset();
 
 
-  resetHistories();
+  hist_.reset();
   phase_ = Phase::WARMUP;
   time_since_friction_prediction_ = 0.0;
 
@@ -248,7 +254,7 @@ KernelCartesianImpedanceController::update(const rclcpp::Time& /*time*/, const r
     case Phase::WARMUP: {
       // apply zero torque, collect (u=0, y=tau_ext) samples until buffers are full
       if (have_tau_ext_.load(std::memory_order_acquire)) {
-        bool full = warmupStep(tau_ext);
+        bool full = hist_.warmupStep(tau_ext);
         if (full) {
           phase_ = Phase::TRACKING;
           elapsed_time_ = 0.0;
@@ -263,15 +269,15 @@ KernelCartesianImpedanceController::update(const rclcpp::Time& /*time*/, const r
       elapsed_time_ += period.seconds();
       time_since_friction_prediction_ += period.seconds();
 
-      if (!first_update_) {
-        pushYHistory(tau_ext);
+      if (!hist_.firstUpdate()) {
+        hist_.pushY(tau_ext);
       } else {
-        first_update_ = false;
+        hist_.markUpdated();
       }
 
       // Interpolate Cartesian reference
-      Eigen::Vector3d pos_target = interpPos(cart_pos_traj_, elapsed_time_);
-      Eigen::Quaterniond quat_target = interpQuat(cart_quat_traj_, elapsed_time_);
+      Eigen::Vector3d pos_target = traj_.interpPos(elapsed_time_);
+      Eigen::Quaterniond quat_target = traj_.interpQuat(elapsed_time_);
       position_d_target_ = pos_target;
       orientation_d_target_ = quat_target;
         
@@ -356,7 +362,7 @@ KernelCartesianImpedanceController::update(const rclcpp::Time& /*time*/, const r
       
       // Friction prediction
       auto t0 = std::chrono::high_resolution_clock::now();
-      friction_pred = predictor_.predict(u_hist_, y_hist_, last_tau_imp_);
+      friction_pred = predictor_.predict(hist_.u(), hist_.y(), last_tau_imp_);
       auto t1 = std::chrono::high_resolution_clock::now();
       double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
       
@@ -368,8 +374,6 @@ KernelCartesianImpedanceController::update(const rclcpp::Time& /*time*/, const r
           dt_ms);
 
       const double r = position.norm(); // ||r||, ball centered at origin
-
-      constexpr double r0 = 0.55; // tune this split radius
 
       const double alpha = (r <= r0) ? alpha_close : alpha_far;
       
@@ -385,8 +389,6 @@ KernelCartesianImpedanceController::update(const rclcpp::Time& /*time*/, const r
       Eigen::Matrix<double, 7, 7> P_tau = jacobian.transpose() * jacobian_transpose_pinv_;
       Eigen::Matrix<double, 7, 7> I7 = Eigen::Matrix<double, 7, 7>::Identity();
 
-      const double beta = 0.5;
-
       Eigen::Matrix<double, 7, 7> P_partial = (1.0 - beta) * I7 + beta * P_tau;
 
       // partially remove nullspace component
@@ -398,7 +400,7 @@ KernelCartesianImpedanceController::update(const rclcpp::Time& /*time*/, const r
       tau_J_d_M_ = tau_cmd;
       
       // Update histories
-      pushUHistory(tau_cmd);
+      hist_.pushU(tau_cmd);
       prev_tau_applied_ = tau_cmd;
 
       // Send efforts
@@ -411,7 +413,7 @@ KernelCartesianImpedanceController::update(const rclcpp::Time& /*time*/, const r
   }
 
   // logging only while tracking
-  const double t_end = t_grid_.empty() ? 0.0 : t_grid_.back();
+  const double t_end = traj_.empty() ? 0.0 : traj_.tGrid().back();
   logger_.updateActiveWindow(elapsed_time_, t_end);
   if (phase_ == Phase::TRACKING) {
     logger_.push(elapsed_time_, tau_ext, friction_pred, ee_pos);
@@ -483,132 +485,6 @@ void KernelCartesianImpedanceController::update_stiffness_and_references() {
       orientation_d_.slerp(filter_params_, orientation_d_target_);
 
   F_contact_des_ = 0.05 * F_contact_target_ + 0.95 * F_contact_des_;
-}
-
-// =================== Trajectory & logging helpers ========================
-bool KernelCartesianImpedanceController::loadCartesianTrajectory(const std::string& path) {
-  std::ifstream f(path);
-  if (!f.is_open()) return false;
-
-  std::string line;
-  if (!std::getline(f, line)) return false;
-
-  std::vector<std::string> cols;
-  {
-    std::stringstream ss(line);
-    std::string c;
-    while (std::getline(ss, c, ',')) cols.push_back(c);
-  }
-  auto col_index = [&](const std::string& name) -> int {
-    for (size_t i = 0; i < cols.size(); ++i) {
-      if (cols[i] == name) return static_cast<int>(i);
-    }
-    return -1;
-  };
-
-  int t_idx = col_index("time_s");
-  int x_idx = col_index("x");
-  int y_idx = col_index("y");
-  int z_idx = col_index("z");
-  int qx_idx = col_index("qx");
-  int qy_idx = col_index("qy");
-  int qz_idx = col_index("qz");
-  int qw_idx = col_index("qw");
-
-  if (t_idx < 0 || x_idx < 0 || y_idx < 0 || z_idx < 0 ||
-      qx_idx < 0 || qy_idx < 0 || qz_idx < 0 || qw_idx < 0) {
-    return false;
-  }
-
-  t_grid_.clear();
-  cart_pos_traj_.clear();
-  cart_quat_traj_.clear();
-
-  while (std::getline(f, line)) {
-    if (line.empty()) continue;
-    std::stringstream ss(line);
-    std::string tok;
-    std::vector<double> vals;
-    while (std::getline(ss, tok, ',')) {
-      if (tok.empty() || tok == " ") {
-        vals.push_back(0.0);
-      } else {
-        vals.push_back(std::stod(tok));
-      }
-    }
-    if (static_cast<int>(vals.size()) <= qw_idx) continue;
-
-    double t  = vals[t_idx];
-    double px = vals[x_idx];
-    double py = vals[y_idx];
-    double pz = vals[z_idx];
-    double qx = vals[qx_idx];
-    double qy = vals[qy_idx];
-    double qz = vals[qz_idx];
-    double qw = vals[qw_idx];
-
-    t_grid_.push_back(t);
-    cart_pos_traj_.emplace_back(px, py, pz);
-    cart_quat_traj_.emplace_back(qw, qx, qy, qz);  // Eigen expects (w,x,y,z)
-  }
-
-  return !t_grid_.empty();
-}
-
-KernelCartesianImpedanceController::Vector3d
-KernelCartesianImpedanceController::interpPos(const std::vector<Vector3d>& data, double t) const {
-  if (data.empty()) return Vector3d::Zero();
-  if (t <= t_grid_.front()) return data.front();
-  if (t >= t_grid_.back())  return data.back();
-
-  auto it = std::upper_bound(t_grid_.begin(), t_grid_.end(), t);
-  size_t k = static_cast<size_t>(std::distance(t_grid_.begin(), it) - 1);
-  double t0 = t_grid_[k], t1 = t_grid_[k + 1];
-  double a = (t - t0) / (t1 - t0);
-  return (1.0 - a) * data[k] + a * data[k + 1];
-}
-
-Eigen::Quaterniond
-KernelCartesianImpedanceController::interpQuat(const std::vector<Eigen::Quaterniond>& data, double t) const {
-  if (data.empty()) return Eigen::Quaterniond::Identity();
-  if (t <= t_grid_.front()) return data.front();
-  if (t >= t_grid_.back())  return data.back();
-
-  auto it = std::upper_bound(t_grid_.begin(), t_grid_.end(), t);
-  size_t k = static_cast<size_t>(std::distance(t_grid_.begin(), it) - 1);
-  double t0 = t_grid_[k], t1 = t_grid_[k + 1];
-  double a = (t - t0) / (t1 - t0);
-  return data[k].slerp(a, data[k + 1]);
-}
-
-// ====================== History management ========================
-void KernelCartesianImpedanceController::resetHistories() {
-  u_hist_.clear();
-  y_hist_.clear();
-  prev_tau_applied_.setZero();
-  first_update_ = true;
-}
-
-bool KernelCartesianImpedanceController::warmupStep(const Vector7d& tau_ext) {
-  if (static_cast<int>(u_hist_.size()) >= T_ini_) u_hist_.pop_front();
-  if (static_cast<int>(y_hist_.size()) >= T_ini_) y_hist_.pop_front();
-  u_hist_.push_back(Vector7d::Zero());
-  y_hist_.push_back(tau_ext);
-  return (static_cast<int>(u_hist_.size()) >= T_ini_) && (static_cast<int>(y_hist_.size()) >= T_ini_);
-}
-
-void KernelCartesianImpedanceController::pushUHistory(const Vector7d& u_curr) {
-  if (static_cast<int>(u_hist_.size()) >= T_ini_) {
-    u_hist_.pop_front();
-  }
-  u_hist_.push_back(u_curr);
-}
-
-void KernelCartesianImpedanceController::pushYHistory(const Vector7d& y_next) {
-  if (static_cast<int>(y_hist_.size()) >= T_ini_) {
-    y_hist_.pop_front();
-  }
-  y_hist_.push_back(y_next);
 }
 
 }  // namespace nonlinear_deepc_controller

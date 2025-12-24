@@ -17,6 +17,9 @@
 #include "nonlinear_deepc_controller/kernel_bundle.hpp"
 #include "nonlinear_deepc_controller/friction_predictor.hpp"
 #include "nonlinear_deepc_controller/csv_logger.hpp"
+#include "nonlinear_deepc_controller/cartesian_trajectory.hpp"
+#include "nonlinear_deepc_controller/history_buffer.hpp"
+
 
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
@@ -58,19 +61,23 @@ class KernelCartesianImpedanceController final : public controller_interface::Co
   KernelBundle kernel_bundle_;
   FrictionPredictor predictor_;
   CsvLogger logger_;
+  CartesianTrajectory traj_;
+  HistoryBuffer hist_{20};
 
   int T_ini_{20}; // length of past horizon (should match T_past used in data_processing)
   Vector7d k_gains_{Vector7d::Zero()};
   Vector7d d_gains_{Vector7d::Zero()};
   Vector7d last_pred_{Vector7d::Zero()};
 
+  // Hyperparams
   double alpha_close{1.5};
   double alpha_far{2.5};
+  double r0{0.55};
+  double beta{0.5};
 
   // Constants
   const int num_joints = 7;
   int N_pred_{10}; // prediction horizon N (should match T_future used in data_processing)
-  bool first_update_{true};
 
   // States
   enum class Phase { WARMUP, TRACKING };
@@ -81,16 +88,6 @@ class KernelCartesianImpedanceController final : public controller_interface::Co
   Vector7d dq_filtered_{Vector7d::Zero()};
   Vector7d initial_q_{Vector7d::Zero()};
   double elapsed_time_{0.0};
-
-  // Cartesian trajectory (from CSV: time_s,x,y,z,qx,qy,qz,qw)
-  std::vector<double> t_grid_;
-  std::vector<Vector3d> cart_pos_traj_;
-  std::vector<Eigen::Quaterniond> cart_quat_traj_;
-
-
-  // Histories (fixed size T_ini)
-  std::deque<Vector7d> u_hist_; // applied torque history
-  std::deque<Vector7d> y_hist_; // measured tau_ext history
   Vector7d prev_tau_applied_{Vector7d::Zero()}; // u_{k-1}
   Vector7d last_tau_imp_{Vector7d::Zero()};
 
@@ -229,12 +226,6 @@ class KernelCartesianImpedanceController final : public controller_interface::Co
       const Eigen::Matrix<double, 7, 1>& tau_d_calculated,
       const Eigen::Matrix<double, 7, 1>& tau_J_d);
   std::array<double, 6> convertToStdArray(const geometry_msgs::msg::WrenchStamped& wrench);
-  
-  // Cartesian trajectory helpers
-  bool loadCartesianTrajectory(const std::string& path);
-  Vector3d interpPos(const std::vector<Vector3d>& data, double t) const;
-  Eigen::Quaterniond interpQuat(const std::vector<Eigen::Quaterniond>& data, double t) const;
-
 
   // warmup & histories
   void resetHistories();

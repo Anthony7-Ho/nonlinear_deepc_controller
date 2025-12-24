@@ -9,5 +9,7 @@ kernel_cartesian_impedance_controller:
     log_decimation: 1
     stop_logging_at_end: true
     post_log_window: 0.0
-    alpha_close: 0.0 # 1.5
-    alpha_far: 0.0 # 2.5
+    alpha_close: 0.0 # 1.5 gain scheduling parameter when close to target
+    alpha_far: 0.0 # 2.5 gain scheduling parameter when far from target
+    r0: 0.55 # 0.55 radius for gain scheduling
+    beta: 0.5 # 0.5 exponent for gain scheduling

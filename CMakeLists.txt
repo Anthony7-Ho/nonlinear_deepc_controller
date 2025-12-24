@@ -28,6 +28,7 @@ add_library(${PROJECT_NAME} SHARED
   src/kernel_cartesian_impedance_controller.cpp
   src/kernel_bundle.cpp
   src/friction_predictor.cpp
+  src/cartesian_trajectory.cpp
 )
 
 ament_target_dependencies(${PROJECT_NAME}
