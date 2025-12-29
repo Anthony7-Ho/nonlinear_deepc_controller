@@ -71,6 +71,11 @@ ament_target_dependencies(cartesian_trajectory_generator
   rclcpp
 )
 
+add_executable(mixed_cartesian_trajectory_generator src/mixed_cartesian_trajectory_generator.cpp)
+ament_target_dependencies(mixed_cartesian_trajectory_generator
+  rclcpp
+)
+
 # install(PROGRAMS
 # scripts/kernel_deepc_optimization.py
 # DESTINATION lib/${PROJECT_NAME}
@@ -82,6 +87,7 @@ install(TARGETS
   create_random_trajectory
   print_current_jacobian
   cartesian_trajectory_generator
+  mixed_cartesian_trajectory_generator
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
