@@ -30,8 +30,8 @@ int main() {
 
   // Phase shifts
   const double phix = 0.0;
-  const double phiy = 2.0 * TWO_PI / 3.0;
-  const double phiz = 4.0 * TWO_PI / 3.0;
+  const double phiy = TWO_PI / 4.0;
+  const double phiz = 3.0 * TWO_PI / 4.0;
 
   // Fixed orientation
   const double qx = 1.0, qy = 0.0, qz = 0.0, qw = 0.0;
