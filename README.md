@@ -51,7 +51,7 @@ ros2 launch nonlinear_deepc_controller joint_impedance_controller.launch.py robo
 
 The controller parameters can be changed under **/config/joint_impedance_controller.yaml**. The log_path parameter should be named 
 ```text
-/home/USER/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_log_(train or validation).csv 
+/home/<USER>/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_log_(train or validation).csv 
 ```
 for consistency with the rest of the code.
 
@@ -71,8 +71,7 @@ The 3 cartesian trajectories are generated using:
 ros2 run nonlinear_deepc_controller mixed_cartesian_trajectory_generator
 ``` 
 
-For consistency, name your trajectory in the format of **cartesian_test_xyz1.csv, cartesian_test_xyz2.csv, cartesian_test_xyz3.csv**.
-and **cartesian_ref_xyz1.csv, cartesian_ref_xyz2.csv, cartesian_ref_xyz3.csv**
+For consistency, name your trajectory in the format of **cartesian_(test or ref)_xyz(1,2,3).csv**.
 
 ```md
 ```C++
@@ -90,10 +89,18 @@ ros2 launch nonlinear_deepc_controller kernel_cartesian_impedance_controller.lau
 robot_ip:=192.168.1.200 
 ``` 
 
-To change the controller parameters (paths etc.), go to **/config/kernel_cartesian_impedance_controller.yaml**. For saving the csv, stick to the convention of using **/home/<USER>/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/logs/<STIFFNESS>/cartesian_log_kernel_xyz<TRAJECTORY NUMBER>.csv**
+To change the controller parameters (paths etc.), go to **/config/kernel_cartesian_impedance_controller.yaml**. For saving the csv, stick to the convention of using
 
-If you want to recover the standard cartesian impedance controller with no friction compensation, simpy set the alpha_close and alpha_far parameters to 
-(0.0) and name the trajectories **/home/<USER>/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/logs/<STIFFNESS>/cartesian_log_xyz<TRAJECTORY NUMBER>.csv**
+```text
+/home/<USER>/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/logs/<STIFFNESS>/cartesian_log_kernel_xyz(1,2,3).csv
+```
+
+If you want to recover the standard cartesian impedance controller with no friction compensation, simpy set the **alpha_close** and **alpha_far** parameters to 
+(0.0) and name the trajectories 
+
+```text
+/home/<USER>/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/logs/<STIFFNESS>/cartesian_log_xyz(1,2,3).csv
+```
 
 ### Evaluation
 
