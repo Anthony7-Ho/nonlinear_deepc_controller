@@ -22,7 +22,7 @@ ros2 launch nonlinear_deepc_controller random_trajectory.launch.py use_fake_hard
 
 There are several parameters you can change, notably the csv output locations which should be consistent with the rest of the code:
 ```md
-```python
+```C++
 static const int N_WAYPOINTS = 3; // number of random waypoints to generate //TODO: change depending on goal
 static const double DWELL_SEC = 1.5; // seconds to dwell at each waypoint
 
@@ -44,4 +44,5 @@ Try to stick to the names of **trajectory_train** and **trajectory_validation**
 ### Collecting input output data
 
 Run the joint impedance controller 
+
 
