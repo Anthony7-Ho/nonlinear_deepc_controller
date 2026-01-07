@@ -23,12 +23,25 @@ ros2 launch nonlinear_deepc_controller random_trajectory.launch.py use_fake_hard
 There are several parameters you can change, notably the csv output locations which should be consistent with the rest of the code:
 ```md
 ```python
-import numpy as np
+static const int N_WAYPOINTS = 3; // number of random waypoints to generate //TODO: change depending on goal
+static const double DWELL_SEC = 1.5; // seconds to dwell at each waypoint
 
-data = np.loadtxt("trajectory_01.csv", delimiter=",")
+
+// Box in BASE_FRAME where random poses are sampled:
+static const double X_MIN = 0.30, X_MAX = 0.70;
+static const double Y_MIN = -0.40, Y_MAX = 0.40;
+static const double Z_MIN = 0.40, Z_MAX = 0.70;
+// Velocity and acceleration scaling for MoveIt
+// TODO: adjust depending on task
+static const double VEL_MIN = 0.05;
+static const double VEL_MAX = 0.07;
+static const double ACC_SCALE = 0.80;
+
+static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_validation.csv"; //TODO: change path
 ```
 Try to stick to the names of **trajectory_train** and **trajectory_validation**
 
 ### Collecting input output data
 
 Run the joint impedance controller 
+
