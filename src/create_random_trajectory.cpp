@@ -26,7 +26,7 @@ static const std::string GROUP_NAME = "fr3_arm";
 static const std::string EEF_LINK = "fr3_hand_tcp";
 static const std::string BASE_FRAME = "fr3_link0";
 static const int N_WAYPOINTS = 3; // number of random waypoints to generate //TODO: change depending on goal
-static const double DWELL_SEC = 0.30; // seconds to dwell at each waypoint
+static const double DWELL_SEC = 1.5; // seconds to dwell at each waypoint
 
 
 // Box in BASE_FRAME where random poses are sampled:
@@ -39,10 +39,12 @@ static const double VEL_MIN = 0.05;
 static const double VEL_MAX = 0.07;
 static const double ACC_SCALE = 0.80;
 
-static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_test.csv"; //TODO: change path
+static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_lol.csv"; //TODO: change path
+/*
 // TODO: Only add for the test trajectory!!
 static const std::string CSV_EE_OUT = std::string(std::getenv("HOME")) + 
         "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/cartesian_ref.csv"; // TODO: change path if you want
+*/
 
 
 // Convert builtin Duration + rclcpp::Duration -> builtin Duration
@@ -148,12 +150,12 @@ static void append_dwell(moveit_msgs::msg::RobotTrajectory &traj, double dwell_s
   append_trajectory(traj, hold, /*skip_first_src_point=*/false);
 }
 
-
-class EELogger {
 /*
+class EELogger {
+/** 
   Logs end-effector position to a CSV file upon receiving
   FrankaRobotState messages.
-*/
+
 public:
   EELogger(const rclcpp::Node::SharedPtr& node, const std::string& topic, const std::string& csv_path)
   : node_(node)
@@ -199,7 +201,7 @@ private:
   rclcpp::Time start_time_;
   std::ofstream ofs_;
 };
-
+*/
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
@@ -228,11 +230,13 @@ int main(int argc, char **argv) {
   move_group.setNumPlanningAttempts(3);
   move_group.setMaxAccelerationScalingFactor(ACC_SCALE);
 
+  /*
   auto ee_logger = std::make_shared<EELogger>(
     node,
     "/franka_robot_state_broadcaster/robot_state",
     CSV_EE_OUT
   );
+  */
 
   RCLCPP_INFO(logger, "Planning with group='%s', eef='%s', base='%s'",
               GROUP_NAME.c_str(), EEF_LINK.c_str(), BASE_FRAME.c_str());
@@ -347,33 +351,6 @@ int main(int argc, char **argv) {
     move_group.clearPoseTargets();
   }
 
-  //// Execute the combined trajectory once at the end
-  //if (!combined.joint_trajectory.points.empty()) {
-  //  RCLCPP_INFO(logger, "Executing combined trajectory with %zu points...", combined.joint_trajectory.points.size());
-//
-  //  // Wrap combined trajectory as a MoveGroup plan
-  //  moveit::planning_interface::MoveGroupInterface::Plan big_plan;
-  //  big_plan.trajectory_ = combined;
-//
-  //  // Visualize before execution
-  //  moveit_msgs::msg::DisplayTrajectory disp_msg;
-  //  disp_msg.model_id = move_group.getRobotModel()->getName();
-  //  if (auto current_ptr = move_group.getCurrentState(0.5))
-  //    moveit::core::robotStateToRobotStateMsg(*current_ptr, disp_msg.trajectory_start);
-  //  disp_msg.trajectory.push_back(combined);
-  //  disp_pub->publish(disp_msg);
-  //  RCLCPP_INFO(logger, "Published combined trajectory preview to /display_planned_path");
-//
-  //  // Execute the entire path once
-  //  const bool exec_ok = (move_group.execute(big_plan) == moveit::core::MoveItErrorCode::SUCCESS);
-//
-  //  if (exec_ok)
-  //    RCLCPP_INFO(logger, "Execution complete!");
-  //  else
-  //    RCLCPP_ERROR(logger, "Execution failed!");
-  //}
-
-
   if (combined.joint_trajectory.points.empty()) {
     RCLCPP_ERROR(logger, "No successful segments executed. Try adjusting bounds or planning settings.");
     rclcpp::shutdown();
@@ -478,49 +455,7 @@ int main(int argc, char **argv) {
   } catch (const std::exception &e) {
     RCLCPP_ERROR(logger, "CSV post-processing failed: %s", e.what());
   }
-  /*//TODO: Uncomment for logging reference end-effector positions
-  // Save end-effector x,y,z over time to a separate CSV
-  try {
-    const auto &jt = combined.joint_trajectory;
-    const size_t nq = jt.joint_names.size();
 
-    std::ofstream ofs_ee(CSV_EE_OUT);
-    ofs_ee << std::fixed << std::setprecision(9);
-
-    // header
-    ofs_ee << "time_s,x,y,z\n";
-
-    // RobotState for FK
-    moveit::core::RobotState fk_state(robot_model);
-    fk_state.setToDefaultValues();
-
-    for (const auto &pt : jt.points) {
-      // time stamp (same as joint CSV)
-      const double t =
-          static_cast<double>(pt.time_from_start.sec) +
-          static_cast<double>(pt.time_from_start.nanosec) * 1e-9;
-
-      // skip malformed points
-      if (pt.positions.size() != nq)
-        continue;
-
-      // set joint positions and update FK
-      fk_state.setJointGroupPositions(jmg, pt.positions);
-      fk_state.update();
-
-      const Eigen::Isometry3d &T = fk_state.getGlobalLinkTransform(EEF_LINK);
-      const Eigen::Vector3d p = T.translation();  // in BASE_FRAME
-
-      ofs_ee << t << "," << p.x() << "," << p.y() << "," << p.z() << "\n";
-    }
-
-    ofs_ee.close();
-    RCLCPP_INFO(logger, "Wrote EE CSV: %s (%zu rows)",
-                CSV_EE_OUT.c_str(), jt.points.size());
-  } catch (const std::exception &e) {
-    RCLCPP_ERROR(logger, "EE CSV write failed: %s", e.what());
-  }
-  */
   executor.cancel();
   spin_thread.join();
   rclcpp::shutdown();
