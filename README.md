@@ -38,14 +38,11 @@ Don't forget to source your workspace after each build:
 source install/setup.sh
 ```
 
-Or add this line at the bottom of your **.bashrc** file:
+Or add this line at the bottom of your **.bashrc** file to avoid sourcing everytime:
 
 ```text
 source /home/<user>/franka_ros2_ws/install/setup.sh 
 ```
-
-
-
 
 ## Generating Training Data
 
