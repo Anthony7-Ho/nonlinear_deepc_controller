@@ -9,7 +9,7 @@ static constexpr double TWO_PI = 6.28318530717958647692;
 
 int main() {
   const double dt = 0.001;
-  const double total_time = 75.0;
+  const double total_time = 65.0;
   const double initial_hold = 5.0;
 
   // Motion/dwell schedule
@@ -20,7 +20,7 @@ int main() {
   const double x0 = 0.4, y0 = 0.0, z0 = 0.4;
 
   // Amplitudes
-  const double Ax = 0.2;
+  const double Ax = 0.1;
   const double Ay = 0.2;
   const double Az = 0.2;
 
@@ -29,8 +29,8 @@ int main() {
   const double w = TWO_PI * f;
 
   // Phase shifts
-  const double phix = 0.0;
-  const double phiy = TWO_PI / 4.0;
+  const double phix = 3.0 * TWO_PI / 4.0;
+  const double phiy = 0.0;
   const double phiz = 3.0 * TWO_PI / 4.0;
 
   // Fixed orientation
@@ -43,9 +43,9 @@ int main() {
     return 1;
   }
 
-  std::string CSV_OUT = std::string(home) + "/cartesian_test_xyz.csv";
+  std::string CSV_OUT = std::string(home) + "/cartesian_test_xyz2.csv";
   std::string CSV_OUT_REF = std::string(home) +
-      "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/cartesian_ref_xyz.csv";
+      "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/cartesian_ref_xyz2.csv";
 
   std::ofstream file(CSV_OUT), file_ref(CSV_OUT_REF);
   if (!file.is_open()) {
