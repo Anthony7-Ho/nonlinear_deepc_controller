@@ -43,6 +43,29 @@ Try to stick to the names of **trajectory_train** and **trajectory_validation**
 
 ### Collecting input output data
 
-Run the joint impedance controller 
+Run the joint impedance controller to follow the trajectories and log the input torques and outputs (external torques tau_ext -> friction):
+
+```bash
+ros2 launch nonlinear_deepc_controller joint_impedance_controller.launch.py robot_ip:=192.168.1.200 
+```
+
+The controller parameters can be changed under **/config/joint_impedance_controller.yaml**. The log_path parameter should be named **tau_log_train** or **tau_log_validation** for consistency with the rest of the code.
+
+## Building the predictors
+
+To build the kernel predictors, head to **/data_processing/1joint_predictor.ipynb** and execute all cells.
+
+## Testing the friction prediction
+
+To test the friction compensation, 3 permutated general sinusoidal trajectories are used.
+
+### Generating cartesian trajectories
+
+The 3 cartesian trajectories are generated using:
+
+```bash
+ros2 run nonlinear_deepc_controller mixed_cartesian_trajectory_generator
+``` 
+
 
 
