@@ -2,7 +2,7 @@
 
 This repository implements a **model-free friction compensation framework** based on **kernel-based prediction**, using only **input-output data only**. No explicit friction model required.
 
-The method is developed at the [Pd¦z Group](https://pdz.ethz.ch/) and is designed for high-performance robotic control scenarios where precision is key
+The method is developed at the [Pd|z Group](https://pdz.ethz.ch/) and is designed for high-performance robotic control scenarios where precision is key
 
 ## Prerequisites:
 
