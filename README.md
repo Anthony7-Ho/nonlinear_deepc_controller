@@ -49,7 +49,7 @@ Run the joint impedance controller to follow the trajectories and log the input 
 ros2 launch nonlinear_deepc_controller joint_impedance_controller.launch.py robot_ip:=192.168.1.200 
 ```
 
-The controller parameters can be changed under **/config/joint_impedance_controller.yaml**. The log_path parameter should be named **tau_log_train** or **tau_log_validation** for consistency with the rest of the code.
+The controller parameters can be changed under **/config/joint_impedance_controller.yaml**. The log_path parameter should be named **"/home/<USER>/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_log_<train OR validation>.csv"** for consistency with the rest of the code.
 
 ## Building the predictors
 
@@ -67,5 +67,32 @@ The 3 cartesian trajectories are generated using:
 ros2 run nonlinear_deepc_controller mixed_cartesian_trajectory_generator
 ``` 
 
+For consistency, name your trajectory in the format of **cartesian_test_xyz1.csv, cartesian_test_xyz2.csv, cartesian_test_xyz3.csv**.
+and **cartesian_ref_xyz1.csv, cartesian_ref_xyz2.csv, cartesian_ref_xyz3.csv**
+
+```md
+```C++
+std::string CSV_OUT = std::string(home) + "/cartesian_test_xyz2.csv";
+  std::string CSV_OUT_REF = std::string(home) +
+      "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/cartesian_ref_xyz2.csv";
+```
+
+### Running the cartesian impedance controller
+
+To run the controller, do:
+
+```bash
+ros2 launch nonlinear_deepc_controller kernel_cartesian_impedance_controller.launch.py
+robot_ip:=192.168.1.200 
+``` 
+
+To change the controller parameters (paths etc.), go to **/config/kernel_cartesian_impedance_controller.yaml**. For saving the csv, stick to the convention of using **/home/<USER>/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/logs/<STIFFNESS>/cartesian_log_kernel_xyz<TRAJECTORY NUMBER>.csv**
+
+If you want to recover the standard cartesian impedance controller with no friction compensation, simpy set the alpha_close and alpha_far parameters to 
+(0.0) and name the trajectories **/home/<USER>/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/logs/<STIFFNESS>/cartesian_log_xyz<TRAJECTORY NUMBER>.csv**
+
+### Evaluation
+
+For evaluation head to **/performance_evaluation/evaluation_plots.ipynb** and execute the cells.
 
 
