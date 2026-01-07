@@ -49,7 +49,11 @@ Run the joint impedance controller to follow the trajectories and log the input 
 ros2 launch nonlinear_deepc_controller joint_impedance_controller.launch.py robot_ip:=192.168.1.200 
 ```
 
-The controller parameters can be changed under **/config/joint_impedance_controller.yaml**. The log_path parameter should be named **"/home/<USER>/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_log_<train OR validation>.csv"** for consistency with the rest of the code.
+The controller parameters can be changed under **/config/joint_impedance_controller.yaml**. The log_path parameter should be named 
+```text
+/home/USER/franka_ros2_ws/src/nonlinear_deepc_controller/data_processing/tau_log_(train or validation).csv 
+```
+for consistency with the rest of the code.
 
 ## Building the predictors
 
