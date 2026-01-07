@@ -39,7 +39,7 @@ static const double VEL_MIN = 0.05;
 static const double VEL_MAX = 0.07;
 static const double ACC_SCALE = 0.80;
 
-static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_lol.csv"; //TODO: change path
+static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_validation.csv"; //TODO: change path
 /*
 // TODO: Only add for the test trajectory!!
 static const std::string CSV_EE_OUT = std::string(std::getenv("HOME")) + 
