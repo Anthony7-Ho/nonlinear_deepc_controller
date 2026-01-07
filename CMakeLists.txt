@@ -58,19 +58,6 @@ ament_target_dependencies(create_random_trajectory
   franka_msgs
 )
 
-add_executable(print_current_jacobian src/print_current_jacobian.cpp)
-ament_target_dependencies(print_current_jacobian
-  rclcpp
-  sensor_msgs
-  moveit_ros_planning_interface
-  moveit_msgs
-)
-
-add_executable(cartesian_trajectory_generator src/cartesian_trajectory_generator.cpp)
-ament_target_dependencies(cartesian_trajectory_generator
-  rclcpp
-)
-
 add_executable(mixed_cartesian_trajectory_generator src/mixed_cartesian_trajectory_generator.cpp)
 ament_target_dependencies(mixed_cartesian_trajectory_generator
   rclcpp
@@ -85,8 +72,6 @@ ament_target_dependencies(mixed_cartesian_trajectory_generator
 install(TARGETS
   ${PROJECT_NAME}
   create_random_trajectory
-  print_current_jacobian
-  cartesian_trajectory_generator
   mixed_cartesian_trajectory_generator
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -94,10 +79,10 @@ install(TARGETS
 )
 
 # install data files to share/<pkg>/data
-install(FILES
-  data_processing/kernel_deepc_bundle.npz
-  DESTINATION share/${PROJECT_NAME}/data
-)
+# install(FILES
+#   data_processing/kernel_deepc_bundle.npz
+#   DESTINATION share/${PROJECT_NAME}/data
+# )
 install(
   DIRECTORY data_processing/kernel_deepc_bundle/
   DESTINATION share/${PROJECT_NAME}/data/kernel_deepc_bundle
