@@ -1,6 +1,6 @@
 # Kernel based friction predictor for Robotic friction compensation
 
-This repository implements a **model-free friction compensation framework** based on **kernel-based prediction**, using only **input-output data only**. No explicit friction model required.
+This repository implements a **model-free friction compensator** based on **kernel-based prediction**, using **input-output data only**. No explicit friction model required.
 
 The method is developed at the [Pd|z Group](https://pdz.ethz.ch/) and is designed for high-performance robotic control scenarios where precision is key
 
