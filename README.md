@@ -161,6 +161,7 @@ If you want to recover the standard cartesian impedance controller with no frict
 
 ### Evaluation
 
-For evaluation head to **/performance_evaluation/evaluation_plots.ipynb** and execute the cells.
+For calculating the errors, head to **/performance_evaluation/evaluating_cartesian_impedance.ipynb** and execute the respective cell
+For plotting, head to **/performance_evaluation/evaluation_plots.ipynb** and execute the cells.
 
 
