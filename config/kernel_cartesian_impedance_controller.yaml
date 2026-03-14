@@ -2,7 +2,7 @@ kernel_cartesian_impedance_controller:
   ros__parameters:
     arm_id: "fr3"
     csv_path: "/home/anthony-ho/cartesian_test_xyz1.csv"
-    log_path: "/home/anthony-ho/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/3000/cartesian_log_kernel_xyz1.csv"
+    log_path: "/home/anthony-ho/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/logs/3000/cartesian_log_kernel_xyz1.csv"
     robot_state_topic: "/franka_robot_state_broadcaster/robot_state"
     kernel_bundle_dir: "data/kernel_deepc_bundle"
     T_ini: 20
