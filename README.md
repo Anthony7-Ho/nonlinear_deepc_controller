@@ -10,6 +10,14 @@ The method is developed at the [Pd|z Group](https://pdz.ethz.ch/) and is designe
 - Libfranka 0.13.0 or newer
 - franka_ros2 v0.13.1
 
+Make sure to install `nlohmann-json` and `mamba` before building the workspace:
+
+```bash
+sudo apt update
+sudo apt install nlohmann-json3-dev
+pip install mamba-ssm causal-conv1d
+```
+
 For further information, please refer to the [Documentation for Franka ROS2 0.13.1](https://polybox.ethz.ch/index.php/s/iYj8ALPijKTAC2z?dir=undefined&path=%2Fgetting%20started%20and%20other%20important%20info%2FInstallation%20Guides&openfile=4252387549)
 
 Once you have everything set up, follow the steps below.

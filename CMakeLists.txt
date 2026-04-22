@@ -63,10 +63,10 @@ ament_target_dependencies(mixed_cartesian_trajectory_generator
   rclcpp
 )
 
-# install(PROGRAMS
-# scripts/kernel_deepc_optimization.py
-# DESTINATION lib/${PROJECT_NAME}
-# )
+install(
+  DIRECTORY data_processing/kernel_deepc_bundle/
+  DESTINATION share/${PROJECT_NAME}/data/kernel_deepc_bundle
+)
 
 # Install
 install(TARGETS
@@ -78,11 +78,6 @@ install(TARGETS
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
-# install data files to share/<pkg>/data
-# install(FILES
-#   data_processing/kernel_deepc_bundle.npz
-#   DESTINATION share/${PROJECT_NAME}/data
-# )
 install(
   DIRECTORY data_processing/kernel_deepc_bundle/
   DESTINATION share/${PROJECT_NAME}/data/kernel_deepc_bundle

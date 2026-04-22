@@ -25,8 +25,8 @@
 static const std::string GROUP_NAME = "fr3_arm";
 static const std::string EEF_LINK = "fr3_hand_tcp";
 static const std::string BASE_FRAME = "fr3_link0";
-static const int N_WAYPOINTS = 3; // number of random waypoints to generate //TODO: change depending on goal
-static const double DWELL_SEC = 1.5; // seconds to dwell at each waypoint
+static const int N_WAYPOINTS = 5; // number of random waypoints to generate //TODO: change depending on goal
+static const double DWELL_SEC = 1.0; // seconds to dwell at each waypoint
 
 
 // Box in BASE_FRAME where random poses are sampled:
@@ -36,10 +36,10 @@ static const double Z_MIN = 0.40, Z_MAX = 0.70;
 // Velocity and acceleration scaling for MoveIt
 // TODO: adjust depending on task
 static const double VEL_MIN = 0.05;
-static const double VEL_MAX = 0.07;
+static const double VEL_MAX = 0.09;
 static const double ACC_SCALE = 0.80;
 
-static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_validation.csv"; //TODO: change path
+static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_train.csv"; //TODO: change path
 /*
 // TODO: Only add for the test trajectory!!
 static const std::string CSV_EE_OUT = std::string(std::getenv("HOME")) + 

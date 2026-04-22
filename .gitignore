@@ -1,7 +1,8 @@
 .vscode/
-*.csv
 *.npz
 *.pdf
 *.bin
 *.json
 *.png
+*.pt
+*.pth
