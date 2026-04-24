@@ -222,22 +222,6 @@ def generate_launch_description():
                           use_fake_hardware_parameter_name: use_fake_hardware}.items(),
     )
 
-    # create random trajectory node
-    create_random_node = Node(
-        package='nonlinear_deepc_controller',
-        executable='create_random_trajectory',
-        output='screen',
-        parameters=[
-            robot_description,
-            robot_description_semantic,
-            kinematics_yaml,
-            planning_pipelines_param,
-            ompl_param,
-        ],
-    )
-
-    delayed_create_random = TimerAction(period=3.0, actions=[create_random_node])
-
     # Launch args
     robot_arg = DeclareLaunchArgument(
         robot_ip_parameter_name, description='Hostname or IP address of the robot.'
@@ -263,6 +247,5 @@ def generate_launch_description():
             joint_state_publisher,
             franka_robot_state_broadcaster,
             gripper_launch_file,
-            delayed_create_random,
         ] + load_controllers
     )

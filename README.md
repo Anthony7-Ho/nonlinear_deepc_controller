@@ -78,7 +78,7 @@ ros2 launch franka_bringup move_to_start_example_controller.launch.py use_fake_h
 This launch file starts MoveIt and the necessary ROS2 controllers required for trajectory generation. Leave this terminal running.
 
 ```bash
-ros2 launch nonlinear_deepc_controller random_trajectory.launch.py use_fake_hardware:=false robot_ip:=192.168.1.200
+ros2 launch nonlinear_deepc_controller start_moveit.launch.py use_fake_hardware:=false robot_ip:=192.168.1.200
 ``` 
 
 **Step 3: Run a trajectory generator**
