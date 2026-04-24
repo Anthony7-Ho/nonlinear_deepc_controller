@@ -66,38 +66,44 @@ The trajectories should:
 
 ### Running the Trajectory Generation
 
-Before running the trajectory generation, bring the robot in a starting position:
+Data generation involves launching the robot hardware interface along with MoveIt, and then running a standalone node to sample and generate the points.
+
+**Step 1: Bring the robot to the start position.**
 
 ```bash
 ros2 launch franka_bringup move_to_start_example_controller.launch.py use_fake_hardware:=false robot_ip:=192.168.1.200
 ```
 
-To generate the trajectories, run the trajectory generation command:
+**Step 2: Start the MoveIt planning pipeline.** 
+This launch file starts MoveIt and the necessary ROS2 controllers required for trajectory generation. Leave this terminal running.
 
 ```bash
 ros2 launch nonlinear_deepc_controller random_trajectory.launch.py use_fake_hardware:=false robot_ip:=192.168.1.200
 ``` 
 
-There are several parameters you can change, notably the csv output locations which should be consistent with the rest of the code:
-```md
-```C++
-static const int N_WAYPOINTS = 3; // number of random waypoints to generate //TODO: change depending on goal
-static const double DWELL_SEC = 1.5; // seconds to dwell at each waypoint
+**Step 3: Run a trajectory generator**
 
+Open a new terminal, source the workspace, and run **one** of the following generators based on the type of data you need.
 
-// Box in BASE_FRAME where random poses are sampled:
-static const double X_MIN = 0.30, X_MAX = 0.70;
-static const double Y_MIN = -0.40, Y_MAX = 0.40;
-static const double Z_MIN = 0.40, Z_MAX = 0.70;
-// Velocity and acceleration scaling for MoveIt
-// TODO: adjust depending on task
-static const double VEL_MIN = 0.05;
-static const double VEL_MAX = 0.07;
-static const double ACC_SCALE = 0.80;
+- **Option A: Joint Space Random Trajectory (Recommended for Friction Compensation)**
+  Samples points uniformly across the limits of all 7 joints. Mandatorily moves all joints over a very wide range of speeds. Generates `trajectory_joint_train.csv`.
+  ```bash
+  ros2 run nonlinear_deepc_controller create_random_joint_trajectory
+  ```
 
-static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_validation.csv"; //TODO: change path
-```
-Try to stick to the names of **trajectory_train** and **trajectory_validation**
+- **Option B: Cartesian Space Random Trajectory**
+  Samples random XYZ poses in a bounding box and uses Inverse Kinematics to find joint targets.
+  ```bash
+  ros2 run nonlinear_deepc_controller create_random_trajectory
+  ```
+
+- **Option C: Mixed Sine Cartesian Trajectory (Recommended for Test/Evaluation)**
+  Generates fixed multi-axis sinusoidal motions over 65 seconds for test and evaluation purposes.
+  ```bash
+  ros2 run nonlinear_deepc_controller mixed_cartesian_trajectory_generator
+  ```
+  
+Before running the nodes in options A or B, you can inspect their source code (in `src/create_random_joint_trajectory.cpp` or `src/create_random_trajectory.cpp`) and change parameters like number of waypoints, velocity ranges, dwell times, and output CSV names. For data used to train models, try to stick to naming your output files `trajectory_train.csv` or `trajectory_validation.csv`.
 
 ### Collecting input output data
 

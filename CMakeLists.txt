@@ -58,6 +58,15 @@ ament_target_dependencies(create_random_trajectory
   franka_msgs
 )
 
+add_executable(create_random_joint_trajectory src/create_random_joint_trajectory.cpp)
+ament_target_dependencies(create_random_joint_trajectory
+  rclcpp
+  moveit_ros_planning_interface
+  moveit_msgs
+  geometry_msgs
+  franka_msgs
+)
+
 add_executable(mixed_cartesian_trajectory_generator src/mixed_cartesian_trajectory_generator.cpp)
 ament_target_dependencies(mixed_cartesian_trajectory_generator
   rclcpp
@@ -72,6 +81,7 @@ install(
 install(TARGETS
   ${PROJECT_NAME}
   create_random_trajectory
+  create_random_joint_trajectory
   mixed_cartesian_trajectory_generator
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
