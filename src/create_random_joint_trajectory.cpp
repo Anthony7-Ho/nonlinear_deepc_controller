@@ -21,12 +21,18 @@
 // Constants
 static const std::string GROUP_NAME = "fr3_arm";
 static const std::string BASE_FRAME = "fr3_link0";
+static const std::string EEF_LINK = "fr3_hand_tcp";
 static const int N_WAYPOINTS = 30; // Increased number of waypoints for better joint exploration
 static const double DWELL_SEC = 0.5; // Dwell time at each waypoint slightly shorter
 
+// Box in BASE_FRAME where random poses are sampled:
+static const double X_MIN = 0.30, X_MAX = 0.70;
+static const double Y_MIN = -0.40, Y_MAX = 0.40;
+static const double Z_MIN = 0.25, Z_MAX = 0.70;
+
 // Velocity and acceleration scaling for MoveIt
 static const double VEL_MIN = 0.05;
-static const double VEL_MAX = 0.80; // Much wider velocity range
+static const double VEL_MAX = 0.5; // Much wider velocity range
 static const double ACC_SCALE = 0.80;
 
 static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_joint_train.csv";
@@ -152,13 +158,23 @@ int main(int argc, char **argv) {
 
     move_group.setStartStateToCurrentState();
 
-    const std::size_t MAX_SAMPLING_RETRIES = 50;
+    const std::size_t MAX_SAMPLING_RETRIES = 5000;
     bool found_valid_target = false;
     moveit::core::RobotState target_state = last_state;
 
     // Sample random joint states and check self collision
     for (std::size_t tries = 0; tries < MAX_SAMPLING_RETRIES; ++tries) {
       target_state.setToRandomPositions(jmg);
+      target_state.update(); // Update to calculate forward kinematics
+
+      const Eigen::Isometry3d& eef_transform = target_state.getGlobalLinkTransform(EEF_LINK);
+      double x = eef_transform.translation().x();
+      double y = eef_transform.translation().y();
+      double z = eef_transform.translation().z();
+
+      if (x < X_MIN || x > X_MAX || y < Y_MIN || y > Y_MAX || z < Z_MIN || z > Z_MAX) {
+        continue;
+      }
       
       collision_detection::CollisionRequest req;
       collision_detection::CollisionResult res;
