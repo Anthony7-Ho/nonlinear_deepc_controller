@@ -75,7 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=0,
+        default=512,
         help="Training batch size. <=0 means full-batch training.",
     )
     parser.add_argument(
@@ -84,8 +84,8 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Eval batch size. <=0 means one full validation batch.",
     )
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weight-decay", type=float, default=1e-5)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
 
@@ -184,6 +184,37 @@ def load_state_to_friction_data(csv_path: str) -> Tuple[np.ndarray, np.ndarray, 
     return q_full.astype(np.float32), dq_full.astype(np.float32), tau_ext.astype(np.float32)
 
 
+def drop_nonfinite_rows(
+    q: np.ndarray,
+    dq: np.ndarray,
+    tau: np.ndarray,
+    dataset_name: str,
+    csv_path: Path,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    mask_q = np.isfinite(q).all(axis=1)
+    mask_dq = np.isfinite(dq).all(axis=1)
+    mask_tau = np.isfinite(tau).all(axis=1)
+    valid_mask = mask_q & mask_dq & mask_tau
+
+    dropped = int((~valid_mask).sum())
+    if dropped > 0:
+        print(
+            f"Warning: dropped {dropped} non-finite rows from {dataset_name} set "
+            f"({csv_path})."
+        )
+
+    q_clean = q[valid_mask]
+    dq_clean = dq[valid_mask]
+    tau_clean = tau[valid_mask]
+
+    if q_clean.shape[0] == 0:
+        raise ValueError(
+            f"No finite rows remaining in {dataset_name} dataset after filtering: {csv_path}"
+        )
+
+    return q_clean, dq_clean, tau_clean
+
+
 def build_baseline_features(q: np.ndarray, dq: np.ndarray) -> np.ndarray:
     return np.hstack([q, dq]).astype(np.float32)
 
@@ -199,6 +230,31 @@ def build_physics_features(
     else:
         per_joint = np.stack([dq, sign_dq], axis=2)
     return per_joint.reshape(per_joint.shape[0], -1).astype(np.float32)
+
+
+def print_distribution_diagnostics(
+    dq_train: np.ndarray,
+    dq_valid: np.ndarray,
+    y_train: np.ndarray,
+    y_valid: np.ndarray,
+) -> None:
+    """Print per-feature train/val mean and std to flag distribution shift."""
+    print("\n--- Distribution diagnostics (train vs val) ---")
+    print(f"{'Feature':<18} {'train_mean':>12} {'val_mean':>12} {'train_std':>12} {'val_std':>12} {'mean_shift':>12}")
+    n_joints = dq_train.shape[1]
+    for j in range(n_joints):
+        tm, vm = float(dq_train[:, j].mean()), float(dq_valid[:, j].mean())
+        ts, vs_ = float(dq_train[:, j].std()), float(dq_valid[:, j].std())
+        shift = abs(tm - vm) / max(ts, 1e-8)
+        flag = " <-- SHIFT" if shift > 0.5 else ""
+        print(f"  dq[{j}]           {tm:>12.4f} {vm:>12.4f} {ts:>12.4f} {vs_:>12.4f} {shift:>12.3f}{flag}")
+    for j in range(n_joints):
+        tm, vm = float(y_train[:, j].mean()), float(y_valid[:, j].mean())
+        ts, vs_ = float(y_train[:, j].std()), float(y_valid[:, j].std())
+        shift = abs(tm - vm) / max(ts, 1e-8)
+        flag = " <-- SHIFT" if shift > 0.5 else ""
+        print(f"  tau_ext[{j}]      {tm:>12.4f} {vm:>12.4f} {ts:>12.4f} {vs_:>12.4f} {shift:>12.3f}{flag}")
+    print("--- End diagnostics ---\n")
 
 
 def build_temporal_features(q: np.ndarray, dq: np.ndarray) -> np.ndarray:
@@ -471,6 +527,7 @@ def train_temporal_model(
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = CosineAnnealingLR(optimizer, T_max=max(epochs, 1), eta_min=lr * 0.01)
     criterion = nn.MSELoss()
+    scaler = torch.amp.GradScaler(device.type, enabled=device.type == "cuda")
 
     history: Dict[str, list] = {
         "train_epochs": [],
@@ -501,9 +558,11 @@ def train_temporal_model(
                 pred = model(xb)
                 loss = criterion(pred, yb)
 
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             bs = xb.shape[0]
             running += float(loss.item()) * bs
@@ -1103,8 +1162,25 @@ def main() -> None:
     q_train, dq_train, y_train = load_state_to_friction_data(str(train_csv))
     q_valid, dq_valid, y_valid = load_state_to_friction_data(str(valid_csv))
 
+    q_train, dq_train, y_train = drop_nonfinite_rows(
+        q=q_train,
+        dq=dq_train,
+        tau=y_train,
+        dataset_name="train",
+        csv_path=train_csv,
+    )
+    q_valid, dq_valid, y_valid = drop_nonfinite_rows(
+        q=q_valid,
+        dq=dq_valid,
+        tau=y_valid,
+        dataset_name="validation",
+        csv_path=valid_csv,
+    )
+
     print(f"q_train shape: {q_train.shape}, dq_train shape: {dq_train.shape}, y_train: {y_train.shape}")
     print(f"q_valid shape: {q_valid.shape}, dq_valid shape: {dq_valid.shape}, y_valid: {y_valid.shape}")
+
+    print_distribution_diagnostics(dq_train, dq_valid, y_train, y_valid)
 
     n_train = q_train.shape[0]
     n_valid = q_valid.shape[0]

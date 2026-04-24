@@ -83,8 +83,10 @@ Step 3. In a new terminal (after sourcing workspace), run one generator:
 - Option A: Joint-space random trajectory (recommended for friction training)
 
 ```bash
-ros2 launch nonlinear_deepc_controller generate_random_joint_trajectory.launch.py use_fake_hardware:=false robot_ip:=192.168.1.200
+ros2 launch nonlinear_deepc_controller generate_random_joint_trajectory.launch.py use_fake_hardware:=false robot_ip:=192.168.1.200 mode:=train
 ```
+
+Use `mode:=validation` for validation data.
 
 - Option B: Cartesian random trajectory
 
@@ -101,6 +103,8 @@ ros2 run nonlinear_deepc_controller mixed_cartesian_trajectory_generator
 Important:
 - Options A and B must be started with `ros2 launch` (not `ros2 run`) so MoveIt parameters (`robot_description` and `robot_description_semantic`) are available.
 - Option C does not use MoveIt and can be run directly.
+- In Option A, `mode:=train` generates 30 waypoints and writes `~/trajectory_joint_train.csv`; `mode:=validation` generates 15 waypoints and writes `~/trajectory_joint_val.csv`.
+- Shared sampler config for both Option A and B is in `config/trajectory_generation_config.json`.
 
 ### Safety Workspace Bounds
 
@@ -111,6 +115,8 @@ X: [0.30, 0.70]
 Y: [-0.40, 0.40]
 Z: [0.40, 0.70]
 ```
+
+Both random generators also add a collision table to the MoveIt planning scene with table top at `z=0` in `fr3_link0` to avoid sampling/planning trajectories that dip below the table plane.
 
 If needed, tune sampling and timing in:
 - `src/create_random_joint_trajectory.cpp`

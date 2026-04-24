@@ -10,6 +10,7 @@ find_package(controller_interface REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(franka_semantic_components REQUIRED)
 find_package(franka_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
@@ -51,6 +52,7 @@ pluginlib_export_plugin_description_file(
 # executables
 add_executable(create_random_trajectory src/create_random_trajectory.cpp)
 ament_target_dependencies(create_random_trajectory
+  ament_index_cpp
   rclcpp
   moveit_ros_planning_interface
   moveit_msgs
@@ -60,6 +62,7 @@ ament_target_dependencies(create_random_trajectory
 
 add_executable(create_random_joint_trajectory src/create_random_joint_trajectory.cpp)
 ament_target_dependencies(create_random_joint_trajectory
+  ament_index_cpp
   rclcpp
   moveit_ros_planning_interface
   moveit_msgs

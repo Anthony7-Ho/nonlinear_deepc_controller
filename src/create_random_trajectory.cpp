@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
+#include <moveit_msgs/msg/collision_object.hpp>
 #include <moveit_msgs/msg/display_trajectory.hpp>
 #include <moveit_msgs/msg/robot_trajectory.hpp>
 #include <moveit/robot_state/robot_state.h>
@@ -8,47 +9,118 @@
 #include <moveit/planning_scene/planning_scene.h>
 #include <moveit/collision_detection/collision_common.h>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <shape_msgs/msg/solid_primitive.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include <builtin_interfaces/msg/duration.hpp>
 #include <Eigen/Geometry>
-#include <franka_msgs/msg/franka_robot_state.hpp>
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <nlohmann/json.hpp>
 #include <thread>
 
-#include <random>
+#include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <limits>
-#include <cmath>
-#include <cstdlib>
+#include <random>
+#include <sstream>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
-// Constants
-static const std::string GROUP_NAME = "fr3_arm";
-static const std::string EEF_LINK = "fr3_hand_tcp";
-static const std::string BASE_FRAME = "fr3_link0";
-static const int N_WAYPOINTS = 5; // number of random waypoints to generate //TODO: change depending on goal
-static const double DWELL_SEC = 1.0; // seconds to dwell at each waypoint
+struct SharedSamplingConfig {
+  std::string base_frame = "fr3_link0";
+  std::string eef_link = "fr3_hand_tcp";
+  double x_min = 0.30;
+  double x_max = 0.70;
+  double y_min = -0.40;
+  double y_max = 0.40;
+  double z_min = 0.40;
+  double z_max = 0.70;
+  double table_size_x = 2.0;
+  double table_size_y = 2.0;
+  double table_thickness = 0.08;
+};
 
+struct CartesianRandomConfig {
+  std::string group_name = "fr3_arm";
+  int n_waypoints = 5;
+  double dwell_sec = 1.0;
+  double vel_min = 0.05;
+  double vel_max = 0.09;
+  double acc_scale = 0.80;
+  std::size_t max_ik_retries = 25;
+  std::string output_name = "trajectory_train.csv";
+};
 
-// Box in BASE_FRAME where random poses are sampled:
-static const double X_MIN = 0.30, X_MAX = 0.70;
-static const double Y_MIN = -0.40, Y_MAX = 0.40;
-static const double Z_MIN = 0.40, Z_MAX = 0.70;
-// Velocity and acceleration scaling for MoveIt
-// TODO: adjust depending on task
-static const double VEL_MIN = 0.05;
-static const double VEL_MAX = 0.09;
-static const double ACC_SCALE = 0.80;
+template <typename T>
+static void set_if_present(const nlohmann::json &j, const char *key, T &target)
+{
+  if (j.contains(key) && !j.at(key).is_null()) {
+    target = j.at(key).get<T>();
+  }
+}
 
-static const std::string CSV_OUT = std::string(std::getenv("HOME")) + "/trajectory_train.csv"; //TODO: change path
-/*
-// TODO: Only add for the test trajectory!!
-static const std::string CSV_EE_OUT = std::string(std::getenv("HOME")) + 
-        "/franka_ros2_ws/src/nonlinear_deepc_controller/performance_evaluation/cartesian_ref.csv"; // TODO: change path if you want
-*/
+static bool load_config(const std::string &path,
+                        SharedSamplingConfig &shared,
+                        CartesianRandomConfig &cart,
+                        const rclcpp::Logger &logger)
+{
+  try {
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) {
+      RCLCPP_WARN(logger, "Could not open config file: %s. Using built-in defaults.", path.c_str());
+      return false;
+    }
 
+    nlohmann::json root;
+    ifs >> root;
+
+    if (root.contains("shared") && root["shared"].is_object()) {
+      const auto &s = root["shared"];
+      set_if_present(s, "base_frame", shared.base_frame);
+      set_if_present(s, "eef_link", shared.eef_link);
+
+      if (s.contains("sampling_box") && s["sampling_box"].is_object()) {
+        const auto &b = s["sampling_box"];
+        set_if_present(b, "x_min", shared.x_min);
+        set_if_present(b, "x_max", shared.x_max);
+        set_if_present(b, "y_min", shared.y_min);
+        set_if_present(b, "y_max", shared.y_max);
+        set_if_present(b, "z_min", shared.z_min);
+        set_if_present(b, "z_max", shared.z_max);
+      }
+
+      if (s.contains("table") && s["table"].is_object()) {
+        const auto &t = s["table"];
+        set_if_present(t, "size_x", shared.table_size_x);
+        set_if_present(t, "size_y", shared.table_size_y);
+        set_if_present(t, "thickness", shared.table_thickness);
+      }
+    }
+
+    if (root.contains("cartesian_random") && root["cartesian_random"].is_object()) {
+      const auto &c = root["cartesian_random"];
+      set_if_present(c, "group_name", cart.group_name);
+      set_if_present(c, "n_waypoints", cart.n_waypoints);
+      set_if_present(c, "dwell_sec", cart.dwell_sec);
+      set_if_present(c, "vel_min", cart.vel_min);
+      set_if_present(c, "vel_max", cart.vel_max);
+      set_if_present(c, "acc_scale", cart.acc_scale);
+      set_if_present(c, "max_ik_retries", cart.max_ik_retries);
+      set_if_present(c, "output_name", cart.output_name);
+    }
+
+    RCLCPP_INFO(logger, "Loaded trajectory config from %s", path.c_str());
+    return true;
+  } catch (const std::exception &e) {
+    RCLCPP_WARN(logger, "Failed to parse config file %s (%s). Using built-in defaults.", path.c_str(), e.what());
+    return false;
+  }
+}
 
 // Convert builtin Duration + rclcpp::Duration -> builtin Duration
-inline builtin_interfaces::msg::Duration add_duration(
+static builtin_interfaces::msg::Duration add_duration(
     const builtin_interfaces::msg::Duration &a,
     const rclcpp::Duration &b)
 {
@@ -59,22 +131,69 @@ inline builtin_interfaces::msg::Duration add_duration(
   return out;
 }
 
+static bool is_in_sampling_box(const Eigen::Vector3d &p, const SharedSamplingConfig &cfg)
+{
+  return p.x() >= cfg.x_min && p.x() <= cfg.x_max &&
+         p.y() >= cfg.y_min && p.y() <= cfg.y_max &&
+         p.z() >= cfg.z_min && p.z() <= cfg.z_max;
+}
+
+static bool is_state_in_sampling_box(const moveit::core::RobotState &state,
+                                     const std::string &eef_link,
+                                     const SharedSamplingConfig &cfg)
+{
+  const auto &eef_tf = state.getGlobalLinkTransform(eef_link);
+  return is_in_sampling_box(eef_tf.translation(), cfg);
+}
+
+static bool trajectory_stays_in_sampling_box(
+    const moveit_msgs::msg::RobotTrajectory &traj,
+    const moveit::core::RobotModelConstPtr &robot_model,
+    const moveit::core::JointModelGroup *jmg,
+    const std::string &eef_link,
+    const SharedSamplingConfig &cfg)
+{
+  if (!jmg) {
+    return false;
+  }
+
+  moveit::core::RobotState probe(robot_model);
+  const std::size_t dof = jmg->getVariableCount();
+  for (const auto &pt : traj.joint_trajectory.points) {
+    if (pt.positions.size() != dof) {
+      return false;
+    }
+
+    probe.setJointGroupPositions(jmg, pt.positions);
+    probe.update();
+    if (!is_state_in_sampling_box(probe, eef_link, cfg)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 // Append source (src) trajectory into destination (dst), shifting src by t_offset = last(dst).time_from_start
 static void append_trajectory(moveit_msgs::msg::RobotTrajectory &dst,
                               const moveit_msgs::msg::RobotTrajectory &src,
                               bool skip_first_src_point = true)
 {
   const auto &src_jt = src.joint_trajectory;
-  if (src_jt.points.empty()) return;
+  if (src_jt.points.empty()) {
+    return;
+  }
 
-  if (dst.joint_trajectory.joint_names.empty()) dst.joint_trajectory.joint_names = src_jt.joint_names;
+  if (dst.joint_trajectory.joint_names.empty()) {
+    dst.joint_trajectory.joint_names = src_jt.joint_names;
+  }
 
-  // 1 ms gap to guarantee strictly increasing times at the seam
   constexpr double EPS_GAP = 1e-3;
 
   rclcpp::Duration t_offset(0, 0);
-  if (!dst.joint_trajectory.points.empty()){
-    t_offset = rclcpp::Duration(dst.joint_trajectory.points.back().time_from_start) + rclcpp::Duration::from_seconds(EPS_GAP);
+  if (!dst.joint_trajectory.points.empty()) {
+    t_offset = rclcpp::Duration(dst.joint_trajectory.points.back().time_from_start) +
+               rclcpp::Duration::from_seconds(EPS_GAP);
   }
 
   const bool skip = skip_first_src_point && !dst.joint_trajectory.points.empty();
@@ -89,32 +208,27 @@ static void append_trajectory(moveit_msgs::msg::RobotTrajectory &dst,
   }
 }
 
-
 // Generate a random pose within the defined box and with random orientation
-static geometry_msgs::msg::PoseStamped random_pose()
+static geometry_msgs::msg::PoseStamped random_pose(const SharedSamplingConfig &cfg,
+                                                   std::mt19937 &gen)
 {
-  static std::random_device rd;
-  static std::mt19937 gen(rd());
-  static std::uniform_real_distribution<double> dx(X_MIN, X_MAX);
-  static std::uniform_real_distribution<double> dy(Y_MIN, Y_MAX);
-  static std::uniform_real_distribution<double> dz(Z_MIN, Z_MAX);
-  static std::uniform_real_distribution<double> u01(0.0, 1.0);
-  static std::uniform_real_distribution<double> angle(-M_PI, M_PI);
+  std::uniform_real_distribution<double> dx(cfg.x_min, cfg.x_max);
+  std::uniform_real_distribution<double> dy(cfg.y_min, cfg.y_max);
+  std::uniform_real_distribution<double> dz(cfg.z_min, cfg.z_max);
+  std::uniform_real_distribution<double> u01(0.0, 1.0);
 
   geometry_msgs::msg::PoseStamped p;
-  p.header.frame_id = BASE_FRAME;
+  p.header.frame_id = cfg.base_frame;
 
-  // Random position in box
   p.pose.position.x = dx(gen);
   p.pose.position.y = dy(gen);
   p.pose.position.z = dz(gen);
 
-  // Random orientation (uniform on SO(3) via random quaternion)
-  double u1 = u01(gen);
-  double u2 = u01(gen);
-  double u3 = u01(gen);
-  double sqrt1_minus_u1 = std::sqrt(1 - u1);
-  double sqrt_u1 = std::sqrt(u1);
+  const double u1 = u01(gen);
+  const double u2 = u01(gen);
+  const double u3 = u01(gen);
+  const double sqrt1_minus_u1 = std::sqrt(1 - u1);
+  const double sqrt_u1 = std::sqrt(u1);
 
   p.pose.orientation.x = sqrt1_minus_u1 * std::sin(2 * M_PI * u2);
   p.pose.orientation.y = sqrt1_minus_u1 * std::cos(2 * M_PI * u2);
@@ -127,7 +241,9 @@ static geometry_msgs::msg::PoseStamped random_pose()
 // Append a dwell segment after a motion (keep same q, zero dq)
 static void append_dwell(moveit_msgs::msg::RobotTrajectory &traj, double dwell_sec)
 {
-  if (traj.joint_trajectory.points.empty()) return;
+  if (traj.joint_trajectory.points.empty()) {
+    return;
+  }
 
   const auto &last = traj.joint_trajectory.points.back();
   const size_t nq = last.positions.size();
@@ -140,73 +256,42 @@ static void append_dwell(moveit_msgs::msg::RobotTrajectory &traj, double dwell_s
   p.velocities.assign(nq, 0.0);
   p.accelerations.assign(nq, 0.0);
 
-  // dwell
   p.time_from_start.sec = static_cast<int32_t>(std::floor(dwell_sec));
-  p.time_from_start.nanosec = static_cast<uint32_t>((dwell_sec - std::floor(dwell_sec)) * 1e9);
+  p.time_from_start.nanosec =
+      static_cast<uint32_t>((dwell_sec - std::floor(dwell_sec)) * 1e9);
 
   hold.joint_trajectory.points.push_back(p);
-
-  // Don't skip the first source point when appending a dwell
-  append_trajectory(traj, hold, /*skip_first_src_point=*/false);
+  append_trajectory(traj, hold, false);
 }
 
-/*
-class EELogger {
-/** 
-  Logs end-effector position to a CSV file upon receiving
-  FrankaRobotState messages.
-
-public:
-  EELogger(const rclcpp::Node::SharedPtr& node, const std::string& topic, const std::string& csv_path)
-  : node_(node)
-  {
-    ofs_.open(csv_path);
-    if (!ofs_.is_open()) {
-      RCLCPP_ERROR(node_->get_logger(), "EELogger: could not open %s", csv_path.c_str());
-      return;
-    }
-
-    // Header
-    ofs_ << std::fixed << std::setprecision(9);
-    ofs_ << "time_s,x,y,z\n";
-
-    start_time_ = node_->get_clock()->now();
-
-    sub_ = node_->create_subscription<franka_msgs::msg::FrankaRobotState>(
-      topic,
-      rclcpp::QoS(rclcpp::KeepLast(5)).reliable(),
-      std::bind(&EELogger::callback, this, std::placeholders::_1));
-  }
-
-  ~EELogger() {
-    if (ofs_.is_open()) {
-      ofs_.close();
-    }
-  }
-
-private:
-  void callback(const franka_msgs::msg::FrankaRobotState::SharedPtr msg) {
-    if (!ofs_.is_open()) return;
-
-    // elapsed time since logger was created (seconds)
-    const auto now = node_->get_clock()->now();
-    double t = (now - start_time_).seconds();
-
-    const auto& p = msg->o_t_ee.pose.position;
-    ofs_ << t << "," << p.x << "," << p.y << "," << p.z << "\n";
-  }
-
-  rclcpp::Node::SharedPtr node_;
-  rclcpp::Subscription<franka_msgs::msg::FrankaRobotState>::SharedPtr sub_;
-  rclcpp::Time start_time_;
-  std::ofstream ofs_;
-};
-*/
-
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
   rclcpp::init(argc, argv);
   auto node = rclcpp::Node::make_shared("create_random_trajectory");
   auto logger = node->get_logger();
+
+  std::string default_config_path;
+  try {
+    default_config_path =
+        ament_index_cpp::get_package_share_directory("nonlinear_deepc_controller") +
+        "/config/trajectory_generation_config.json";
+  } catch (const std::exception &) {
+    default_config_path = "trajectory_generation_config.json";
+  }
+
+  const auto config_path =
+      node->declare_parameter<std::string>("trajectory_config_path", default_config_path);
+
+  SharedSamplingConfig shared_cfg;
+  CartesianRandomConfig cart_cfg;
+  load_config(config_path, shared_cfg, cart_cfg, logger);
+
+  const char *home = std::getenv("HOME");
+  const std::string out_dir = home ? std::string(home) : std::string("/tmp");
+  const std::string csv_out =
+      (cart_cfg.output_name.empty() || cart_cfg.output_name.front() != '/')
+          ? out_dir + "/" + cart_cfg.output_name
+          : cart_cfg.output_name;
 
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node);
@@ -214,105 +299,176 @@ int main(int argc, char **argv) {
     executor.spin();
   });
 
-  // Publisher for RViz display
   auto disp_pub = node->create_publisher<moveit_msgs::msg::DisplayTrajectory>(
       "/display_planned_path", rclcpp::QoS(1));
 
-  // MoveGroup interface
-  moveit::planning_interface::MoveGroupInterface move_group(node, GROUP_NAME);
+  moveit::planning_interface::MoveGroupInterface move_group(node, cart_cfg.group_name);
+  moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
   auto robot_model = move_group.getRobotModel();
   planning_scene::PlanningScene planning_scene(robot_model);
-  move_group.setPoseReferenceFrame(BASE_FRAME);
-  move_group.setEndEffectorLink(EEF_LINK);
+
+  move_group.setPoseReferenceFrame(shared_cfg.base_frame);
+  move_group.setEndEffectorLink(shared_cfg.eef_link);
   move_group.setPlanningPipelineId("ompl");
   move_group.setPlannerId("RRTConnectkConfigDefault");
   move_group.setPlanningTime(5.0);
   move_group.setNumPlanningAttempts(3);
-  move_group.setMaxAccelerationScalingFactor(ACC_SCALE);
+  move_group.setMaxAccelerationScalingFactor(cart_cfg.acc_scale);
 
-  /*
-  auto ee_logger = std::make_shared<EELogger>(
-    node,
-    "/franka_robot_state_broadcaster/robot_state",
-    CSV_EE_OUT
-  );
-  */
+  std::string active_eef_link = move_group.getEndEffectorLink();
+  if (active_eef_link.empty()) {
+    active_eef_link = shared_cfg.eef_link;
+  }
 
-  RCLCPP_INFO(logger, "Planning with group='%s', eef='%s', base='%s'",
-              GROUP_NAME.c_str(), EEF_LINK.c_str(), BASE_FRAME.c_str());
+  if (!robot_model->hasLinkModel(active_eef_link)) {
+    RCLCPP_ERROR(logger, "End-effector link '%s' not found in robot model.",
+                 active_eef_link.c_str());
+    rclcpp::shutdown();
+    spin_thread.join();
+    return 1;
+  }
+
+  RCLCPP_INFO(logger,
+              "Generating Cartesian random trajectory: waypoints=%d, group=%s, eef=%s, base=%s, output=%s",
+              cart_cfg.n_waypoints, cart_cfg.group_name.c_str(),
+              active_eef_link.c_str(), shared_cfg.base_frame.c_str(), csv_out.c_str());
+
+  moveit_msgs::msg::CollisionObject table;
+  table.header.frame_id = shared_cfg.base_frame;
+  table.id = "safety_table";
+
+  shape_msgs::msg::SolidPrimitive primitive;
+  primitive.type = shape_msgs::msg::SolidPrimitive::BOX;
+  primitive.dimensions = {
+      shared_cfg.table_size_x,
+      shared_cfg.table_size_y,
+      shared_cfg.table_thickness,
+  };
+
+  geometry_msgs::msg::Pose table_pose;
+  table_pose.orientation.w = 1.0;
+  table_pose.position.x = 0.0;
+  table_pose.position.y = 0.0;
+  table_pose.position.z = -0.5 * shared_cfg.table_thickness;
+
+  table.primitives.push_back(primitive);
+  table.primitive_poses.push_back(table_pose);
+  table.operation = moveit_msgs::msg::CollisionObject::ADD;
+
+  if (!planning_scene_interface.applyCollisionObject(table)) {
+    RCLCPP_WARN(logger, "Failed to add safety table collision object to planning scene.");
+  } else {
+    RCLCPP_INFO(logger,
+                "Added safety table to planning scene (table top at z=0 in %s).",
+                shared_cfg.base_frame.c_str());
+  }
 
   move_group.setStartStateToCurrentState();
 
-  // Random generator for per-segment velocity scaling
   std::random_device rd;
   std::mt19937 gen(rd());
-  std::uniform_real_distribution<double> vel_dist(VEL_MIN, VEL_MAX);
-
-  // Generate random target poses
-  std::vector<geometry_msgs::msg::PoseStamped> waypoints;
-  waypoints.reserve(N_WAYPOINTS);
-  for (int i = 0; i < N_WAYPOINTS; ++i) {
-    waypoints.push_back(random_pose());
-  }
-
-  RCLCPP_INFO(logger, "Generated %d random waypoints.", (int)waypoints.size());
+  std::uniform_real_distribution<double> vel_dist(cart_cfg.vel_min, cart_cfg.vel_max);
 
   moveit_msgs::msg::RobotTrajectory combined;
   int planned_and_executed = 0;
 
-  // Track the start state for each next segment
   auto start_state_ptr = move_group.getCurrentState(1.0);
-  moveit::core::RobotState last_state = start_state_ptr ? *start_state_ptr : moveit::core::RobotState(move_group.getRobotModel());
-  if (!start_state_ptr) last_state.setToDefaultValues();
-  const moveit::core::JointModelGroup* jmg = move_group.getRobotModel()->getJointModelGroup(GROUP_NAME);
+  moveit::core::RobotState last_state =
+      start_state_ptr ? *start_state_ptr : moveit::core::RobotState(robot_model);
+  if (!start_state_ptr) {
+    last_state.setToDefaultValues();
+  }
 
-  // Plan all segments first, then execute once
-  for (size_t i = 0; i < waypoints.size(); ++i) {
+  const moveit::core::JointModelGroup *jmg =
+      robot_model->getJointModelGroup(cart_cfg.group_name);
+  if (!jmg) {
+    RCLCPP_ERROR(logger, "Joint model group '%s' not found.",
+                 cart_cfg.group_name.c_str());
+    rclcpp::shutdown();
+    spin_thread.join();
+    return 1;
+  }
+
+  const std::size_t max_segment_attempts =
+      static_cast<std::size_t>(std::max(1, cart_cfg.n_waypoints)) *
+      std::max<std::size_t>(cart_cfg.max_ik_retries, static_cast<std::size_t>(1)) * 10;
+  std::size_t segment_attempts = 0;
+
+  while (planned_and_executed < cart_cfg.n_waypoints) {
+    if (segment_attempts >= max_segment_attempts) {
+      RCLCPP_ERROR(
+          logger,
+          "Unable to reach requested waypoint count: completed %d/%d after %zu attempts. "
+          "Check bounds/collision constraints or increase retry limits.",
+          planned_and_executed, cart_cfg.n_waypoints, segment_attempts);
+      rclcpp::shutdown();
+      spin_thread.join();
+      return 1;
+    }
+    ++segment_attempts;
+
+    const int segment_idx = planned_and_executed;
     const double vel_scale = vel_dist(gen);
     move_group.setMaxVelocityScalingFactor(vel_scale);
-    RCLCPP_INFO(logger, "Segment %zu: velocity scaling = %.3f", i, vel_scale);
+    RCLCPP_INFO(logger, "Segment %d (attempt %zu/%zu): velocity scaling = %.3f",
+                segment_idx, segment_attempts, max_segment_attempts, vel_scale);
 
     move_group.setStartStateToCurrentState();
 
-    const std::size_t MAX_IK_RETRIES = 25;
-
-    geometry_msgs::msg::PoseStamped target = waypoints[i]; // start from the pre-sampled pose
+    geometry_msgs::msg::PoseStamped target = random_pose(shared_cfg, gen);
     bool ik_ok = false;
-    // Try multiple times to get a valid IK + collision-free pose
-    for (std::size_t tries = 0; tries < MAX_IK_RETRIES; ++tries) {
+
+    for (std::size_t tries = 0; tries < cart_cfg.max_ik_retries; ++tries) {
       moveit::core::RobotState probe = last_state;
-      ik_ok = probe.setFromIK(jmg, target.pose, EEF_LINK, 0.05);
-      if (!ik_ok) { target = random_pose(); continue; }
+      ik_ok = probe.setFromIK(jmg, target.pose, active_eef_link, 0.05);
+      if (!ik_ok) {
+        target = random_pose(shared_cfg, gen);
+        continue;
+      }
+
+      if (!is_state_in_sampling_box(probe, active_eef_link, shared_cfg)) {
+        target = random_pose(shared_cfg, gen);
+        continue;
+      }
 
       collision_detection::CollisionRequest req;
       collision_detection::CollisionResult res;
       planning_scene.checkSelfCollision(req, res, probe);
 
       if (!res.collision) {
-        waypoints[i] = target;
         break;
       }
-      // colliding: resample
-      target = random_pose();
+
+      target = random_pose(shared_cfg, gen);
     }
 
     if (!ik_ok) {
-      RCLCPP_WARN(logger, "Segment %zu: IK failed after %zu retries; skipping segment.", i, MAX_IK_RETRIES);
+      RCLCPP_WARN(logger,
+                  "Segment %d: IK failed after %zu retries; retrying with a new target.",
+                  segment_idx, cart_cfg.max_ik_retries);
       move_group.clearPoseTargets();
-      continue;  // skip if all retries failed
+      continue;
     }
 
-    move_group.setPoseTarget(waypoints[i].pose, EEF_LINK);
+    move_group.setPoseTarget(target.pose, active_eef_link);
 
     moveit::planning_interface::MoveGroupInterface::Plan plan;
     const bool ok = (move_group.plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
     if (!ok || plan.trajectory_.joint_trajectory.points.empty()) {
-      RCLCPP_WARN(logger, "Segment %zu: planning failed.", i);
+      RCLCPP_WARN(logger, "Segment %d: planning failed; retrying with a new target.", segment_idx);
+      move_group.clearPoseTargets();
       continue;
     }
 
-    // motion ends with zero velocity/acceleration
+    if (!trajectory_stays_in_sampling_box(plan.trajectory_, robot_model, jmg,
+                                          active_eef_link, shared_cfg)) {
+      RCLCPP_WARN(logger,
+                  "Segment %d: planned path leaves sampling box; retrying with a new target.", segment_idx);
+      move_group.clearPoseTargets();
+      continue;
+    }
+
     auto &pts = plan.trajectory_.joint_trajectory.points;
     if (!pts.empty()) {
       auto &last = pts.back();
@@ -320,22 +476,22 @@ int main(int argc, char **argv) {
       std::fill(last.accelerations.begin(), last.accelerations.end(), 0.0);
     }
 
-    // Add a dwell
-    append_dwell(plan.trajectory_, DWELL_SEC);
+    append_dwell(plan.trajectory_, cart_cfg.dwell_sec);
 
-    // Visualize
     moveit_msgs::msg::DisplayTrajectory disp_msg;
-    disp_msg.model_id = move_group.getRobotModel()->getName();
+    disp_msg.model_id = robot_model->getName();
     moveit::core::robotStateToRobotStateMsg(last_state, disp_msg.trajectory_start);
     disp_msg.trajectory.push_back(plan.trajectory_);
     disp_pub->publish(disp_msg);
 
-    // Execute each segment
-    const bool exec_ok = (move_group.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS);
-    if (!exec_ok)
-      RCLCPP_ERROR(logger, "Segment %zu: execution failed!", i);
-    else
-      RCLCPP_INFO(logger, "Segment %zu: execution succeeded.", i);
+    const bool exec_ok =
+        (move_group.execute(plan) == moveit::core::MoveItErrorCode::SUCCESS);
+    if (!exec_ok) {
+      RCLCPP_ERROR(logger, "Segment %d: execution failed; retrying.", segment_idx);
+      move_group.clearPoseTargets();
+      continue;
+    }
+    RCLCPP_INFO(logger, "Segment %d: execution succeeded.", segment_idx);
 
     const auto &pts_after = plan.trajectory_.joint_trajectory.points;
     if (!pts_after.empty()) {
@@ -344,7 +500,6 @@ int main(int argc, char **argv) {
       last_state.update();
     }
 
-    // Stitch into combined trajectory
     append_trajectory(combined, plan.trajectory_, true);
     ++planned_and_executed;
 
@@ -354,14 +509,16 @@ int main(int argc, char **argv) {
   if (combined.joint_trajectory.points.empty()) {
     RCLCPP_ERROR(logger, "No successful segments executed. Try adjusting bounds or planning settings.");
     rclcpp::shutdown();
+    spin_thread.join();
     return 1;
   }
 
-  RCLCPP_INFO(logger, "Combined executed trajectory has %zu points from %d segments.", combined.joint_trajectory.points.size(), planned_and_executed);
+  RCLCPP_INFO(logger,
+              "Combined executed trajectory has %zu points from %d segments.",
+              combined.joint_trajectory.points.size(), planned_and_executed);
 
-  // Publish combined trajectory to RViz
   moveit_msgs::msg::DisplayTrajectory disp_msg;
-  disp_msg.model_id = move_group.getRobotModel()->getName();
+  disp_msg.model_id = robot_model->getName();
 
   if (auto current_ptr = move_group.getCurrentState(0.5)) {
     moveit::core::robotStateToRobotStateMsg(*current_ptr, disp_msg.trajectory_start);
@@ -371,30 +528,33 @@ int main(int argc, char **argv) {
   disp_pub->publish(disp_msg);
   RCLCPP_INFO(logger, "Published combined path to /display_planned_path");
 
-  // Save trajectory to CSV
   try {
     const auto &jt = combined.joint_trajectory;
     const size_t nq = jt.joint_names.size();
 
-    std::ofstream ofs(CSV_OUT);
+    std::ofstream ofs(csv_out);
     ofs << std::fixed << std::setprecision(9);
 
     ofs << "time_s";
-    for (size_t j = 0; j < nq; ++j) ofs << ",q_" << j;
-    for (size_t j = 0; j < nq; ++j) ofs << ",dq_" << j;
+    for (size_t j = 0; j < nq; ++j) {
+      ofs << ",q_" << j;
+    }
+    for (size_t j = 0; j < nq; ++j) {
+      ofs << ",dq_" << j;
+    }
     ofs << "\n";
 
     for (const auto &pt : jt.points) {
-      const double t = static_cast<double>(pt.time_from_start.sec) + static_cast<double>(pt.time_from_start.nanosec) * 1e-9;
+      const double t = static_cast<double>(pt.time_from_start.sec) +
+                       static_cast<double>(pt.time_from_start.nanosec) * 1e-9;
 
       ofs << std::setprecision(9) << t << std::setprecision(9);
 
-      if (!pt.positions.empty()){
+      if (!pt.positions.empty()) {
         for (auto v : pt.positions) {
           ofs << "," << v;
         }
-      }
-      else {
+      } else {
         for (size_t j = 0; j < nq; ++j) {
           ofs << "," << std::numeric_limits<double>::quiet_NaN();
         }
@@ -404,8 +564,7 @@ int main(int argc, char **argv) {
         for (auto v : pt.velocities) {
           ofs << "," << v;
         }
-      }
-      else {
+      } else {
         for (size_t j = 0; j < nq; ++j) {
           ofs << "," << std::numeric_limits<double>::quiet_NaN();
         }
@@ -414,14 +573,13 @@ int main(int argc, char **argv) {
     }
 
     ofs.close();
-    RCLCPP_INFO(logger, "Wrote CSV: %s (%zu rows)", CSV_OUT.c_str(), jt.points.size());
+    RCLCPP_INFO(logger, "Wrote CSV: %s (%zu rows)", csv_out.c_str(), jt.points.size());
   } catch (const std::exception &e) {
     RCLCPP_ERROR(logger, "CSV write failed: %s", e.what());
   }
 
-  // Post-process CSV to remove duplicate time_s rows
   try {
-    std::ifstream ifs(CSV_OUT);
+    std::ifstream ifs(csv_out);
     if (!ifs.is_open()) {
       throw std::runtime_error("Failed to reopen CSV for deduplication");
     }
@@ -429,24 +587,24 @@ int main(int argc, char **argv) {
     std::vector<std::string> lines;
     lines.reserve(1000);
     std::string line;
-    std::getline(ifs, line);  // header
-    const std::string header = line;
-    lines.push_back(header);
+    std::getline(ifs, line);
+    lines.push_back(line);
 
     std::unordered_set<std::string> seen_times;
     while (std::getline(ifs, line)) {
-      if (line.empty()) continue;
+      if (line.empty()) {
+        continue;
+      }
       std::istringstream ss(line);
       std::string time_str;
       std::getline(ss, time_str, ',');
       if (seen_times.insert(time_str).second) {
-        // first time seeing this timestamp
         lines.push_back(line);
       }
     }
     ifs.close();
 
-    std::ofstream ofs(CSV_OUT, std::ios::trunc);
+    std::ofstream ofs(csv_out, std::ios::trunc);
     for (const auto &l : lines) {
       ofs << l << "\n";
     }

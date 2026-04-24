@@ -24,10 +24,20 @@ def generate_launch_description():
     robot_ip_parameter_name = 'robot_ip'
     use_fake_hardware_parameter_name = 'use_fake_hardware'
     fake_sensor_commands_parameter_name = 'fake_sensor_commands'
+    mode_parameter_name = 'mode'
+    trajectory_config_path_parameter_name = 'trajectory_config_path'
 
     robot_ip = LaunchConfiguration(robot_ip_parameter_name)
     use_fake_hardware = LaunchConfiguration(use_fake_hardware_parameter_name)
     fake_sensor_commands = LaunchConfiguration(fake_sensor_commands_parameter_name)
+    mode = LaunchConfiguration(mode_parameter_name)
+    trajectory_config_path = LaunchConfiguration(trajectory_config_path_parameter_name)
+
+    config_default = os.path.join(
+        get_package_share_directory('nonlinear_deepc_controller'),
+        'config',
+        'trajectory_generation_config.json',
+    )
 
     franka_xacro_file = os.path.join(
         get_package_share_directory('franka_description'),
@@ -92,6 +102,8 @@ def generate_launch_description():
             kinematics_yaml,
             planning_pipelines_param,
             ompl_param,
+            {'mode': mode},
+            {'trajectory_config_path': trajectory_config_path},
         ],
     )
 
@@ -105,10 +117,22 @@ def generate_launch_description():
         fake_sensor_commands_parameter_name, default_value='false',
         description=f"Fake sensor commands. Only valid when '{use_fake_hardware_parameter_name}' is true"
     )
+    mode_arg = DeclareLaunchArgument(
+        mode_parameter_name,
+        default_value='train',
+        description="Sampling mode: 'train' (30 waypoints) or 'validation' (15 waypoints).",
+    )
+    trajectory_config_path_arg = DeclareLaunchArgument(
+        trajectory_config_path_parameter_name,
+        default_value=config_default,
+        description='Path to shared JSON trajectory configuration file.',
+    )
 
     return LaunchDescription([
         robot_arg,
         use_fake_hardware_arg,
         fake_sensor_commands_arg,
+        mode_arg,
+        trajectory_config_path_arg,
         random_joint_generator_node,
     ])
