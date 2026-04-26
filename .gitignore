@@ -6,3 +6,5 @@
 *.png
 *.pt
 *.pth
+data_processing/kernel_deepc_bundle/
+*.csv

@@ -199,4 +199,3 @@ Run notebooks:
 - `performance_evaluation/evaluating_cartesian_impedance.ipynb`
 - `performance_evaluation/evaluation_plots.ipynb`
 
-

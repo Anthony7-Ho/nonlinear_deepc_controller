@@ -91,8 +91,25 @@ install(TARGETS
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+# Install the kernel bundle when it exists locally.
+# Fresh clones do not have generated predictor data yet, so fall back to a
+# tracked placeholder directory that keeps the package buildable.
+set(KERNEL_BUNDLE_SOURCE_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/data_processing/kernel_deepc_bundle")
+set(KERNEL_BUNDLE_PLACEHOLDER_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/data_processing/kernel_deepc_bundle_placeholder")
+
+if(EXISTS "${KERNEL_BUNDLE_SOURCE_DIR}/joint_0/meta.json")
+  message(STATUS "Installing generated kernel DeePC bundle from ${KERNEL_BUNDLE_SOURCE_DIR}")
+  set(KERNEL_BUNDLE_INSTALL_DIR "${KERNEL_BUNDLE_SOURCE_DIR}")
+else()
+  message(STATUS
+    "Generated kernel DeePC bundle not found; installing placeholder from ${KERNEL_BUNDLE_PLACEHOLDER_DIR}")
+  set(KERNEL_BUNDLE_INSTALL_DIR "${KERNEL_BUNDLE_PLACEHOLDER_DIR}")
+endif()
+
 install(
-  DIRECTORY data_processing/kernel_deepc_bundle/
+  DIRECTORY "${KERNEL_BUNDLE_INSTALL_DIR}/"
   DESTINATION share/${PROJECT_NAME}/data/kernel_deepc_bundle
 )
 
@@ -130,4 +147,3 @@ ament_export_dependencies(
 )
 
 ament_package()
-

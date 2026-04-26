@@ -40,6 +40,20 @@ bool KernelBundle::loadBinMatrix(const std::string& path, int rows, int cols, Ei
 bool KernelBundle::load(const std::string& dir, const rclcpp::Logger& logger) {
   RCLCPP_INFO(logger, "KernelBundle: loading all joints from %s", dir.c_str());
 
+  {
+    std::ifstream placeholder_file(dir + "/PLACEHOLDER.md");
+    std::ifstream first_joint_meta(dir + "/joint_0/meta.json");
+    if (placeholder_file.is_open() && !first_joint_meta.is_open()) {
+      RCLCPP_ERROR(
+          logger,
+          "KernelBundle: %s contains the installed placeholder bundle. "
+          "Generate data-driven predictors in data_processing/kernel_deepc_bundle "
+          "and rebuild/reinstall the package before running the kernel controller.",
+          dir.c_str());
+      return false;
+    }
+  }
+
   bool first_joint = true;
 
   for (int j = 0; j < kNumJoints; ++j) {
