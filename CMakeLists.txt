@@ -75,11 +75,6 @@ ament_target_dependencies(mixed_cartesian_trajectory_generator
   rclcpp
 )
 
-install(
-  DIRECTORY data_processing/kernel_deepc_bundle/
-  DESTINATION share/${PROJECT_NAME}/data/kernel_deepc_bundle
-)
-
 # Install
 install(TARGETS
   ${PROJECT_NAME}
@@ -100,13 +95,16 @@ set(KERNEL_BUNDLE_PLACEHOLDER_DIR
   "${CMAKE_CURRENT_SOURCE_DIR}/data_processing/kernel_deepc_bundle_placeholder")
 
 if(EXISTS "${KERNEL_BUNDLE_SOURCE_DIR}/joint_0/meta.json")
-  message(STATUS "Installing generated kernel DeePC bundle from ${KERNEL_BUNDLE_SOURCE_DIR}")
+  set(KERNEL_BUNDLE_INSTALL_MESSAGE
+    "Installing generated kernel DeePC bundle from ${KERNEL_BUNDLE_SOURCE_DIR}")
   set(KERNEL_BUNDLE_INSTALL_DIR "${KERNEL_BUNDLE_SOURCE_DIR}")
 else()
-  message(STATUS
+  set(KERNEL_BUNDLE_INSTALL_MESSAGE
     "Generated kernel DeePC bundle not found; installing placeholder from ${KERNEL_BUNDLE_PLACEHOLDER_DIR}")
   set(KERNEL_BUNDLE_INSTALL_DIR "${KERNEL_BUNDLE_PLACEHOLDER_DIR}")
 endif()
+
+message(NOTICE "${KERNEL_BUNDLE_INSTALL_MESSAGE}")
 
 install(
   DIRECTORY "${KERNEL_BUNDLE_INSTALL_DIR}/"
